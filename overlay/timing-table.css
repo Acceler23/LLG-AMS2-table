@@ -1,0 +1,66 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: #fff;
+}
+
+#timing-table {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  width: 420px;
+  background: rgba(8, 8, 10, 0.72);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+}
+
+.header, .row {
+  display: grid;
+  grid-template-columns: 40px 1fr 55px 90px 90px;
+  align-items: center;
+  padding: 6px 12px;
+}
+
+.header {
+  background: rgba(255, 40, 40, 0.85);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.row {
+  font-size: 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  transition: background 0.2s ease;
+}
+
+.row:nth-child(even) {
+  background: rgba(255,255,255,0.03);
+}
+
+.row.player {
+  background: rgba(255, 200, 0, 0.18);
+  font-weight: 700;
+}
+
+.row.fastest .last {
+  color: #b400ff;
+  font-weight: 700;
+}
+
+.pos { font-weight: 700; opacity: 0.9; }
+.lap { opacity: 0.75; text-align: center; }
+.last { font-variant-numeric: tabular-nums; }
+.best { font-variant-numeric: tabular-nums; text-align: center; }
+
+/* animação simples quando a posição muda */
+.row.moved {
+  animation: flash 0.6s ease;
+}
+@keyframes flash {
+  from { background: rgba(255,255,255,0.25); }
+}

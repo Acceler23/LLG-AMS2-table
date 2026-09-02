@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <title>Painel de Controle</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #111; color: #eee; padding: 20px; }
+    button { padding: 10px 16px; margin: 6px; font-size: 14px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h2>Painel de Controle</h2>
+  <button onclick="send('obs.setScene', { scene: 'Corrida' })">Cena: Corrida</button>
+  <button onclick="send('obs.setScene', { scene: 'Boxes' })">Cena: Boxes</button>
+  <button onclick="send('obs.startRecord')">Iniciar gravacao</button>
+  <button onclick="send('obs.stopRecord')">Parar gravacao</button>
+
+  <script src="panel.js"></script>
+</body>
+</html>

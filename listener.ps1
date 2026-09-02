@@ -1,0 +1,99 @@
+# listener.ps1
+#
+# Le a Shared Memory do AMS2 ($pcars2$, mesma usada por SimHub/CrewChief)
+# usando os metodos prontos do .NET (MemoryMappedFile / MemoryMappedViewAccessor)
+# -- sem precisar escrever C# ou usar addons nativos.
+#
+# Os offsets abaixo vem da struct oficial (SharedMemory.h) que a Reiza
+# distribui junto do jogo. Le a cada 200ms e manda o resultado (em JSON) pro
+# servidor Node via TCP, com um prefixo de 4 bytes indicando o tamanho.
+
+$mapName = '$pcars2$'
+$bridgeHost = "127.0.0.1"
+$bridgePort = 5607
+
+# Offsets (em bytes) dentro da Shared Memory:
+$OFFSET_VIEWED_PARTICIPANT_INDEX = 20
+$OFFSET_NUM_PARTICIPANTS         = 24
+$OFFSET_PARTICIPANT_INFO_START   = 28
+$PARTICIPANT_INFO_SIZE           = 100   # sizeof(ParticipantInfo)
+$OFFSET_FASTEST_LAP_TIMES        = 8944  # float[64]
+$OFFSET_LAST_LAP_TIMES           = 9200  # float[64]
+$OFFSET_SPEEDS                   = 10800 # float[64]
+
+function Read-CString($accessor, $offset, $maxLen) {
+    $bytes = New-Object byte[] $maxLen
+    $bytesRead = $accessor.ReadArray($offset, $bytes, 0, $maxLen)
+    $nullIndex = [Array]::IndexOf($bytes, [byte]0)
+    if ($nullIndex -lt 0) { $nullIndex = $maxLen }
+    return [System.Text.Encoding]::UTF8.GetString($bytes, 0, $nullIndex)
+}
+
+Write-Host "Bridge (Shared Memory) iniciando..."
+
+while ($true) {
+    try {
+        $tcp = New-Object System.Net.Sockets.TcpClient($bridgeHost, $bridgePort)
+        $stream = $tcp.GetStream()
+        Write-Host "Conectado ao servidor Node."
+
+        while ($tcp.Connected) {
+            try {
+                $mmf = [System.IO.MemoryMappedFiles.MemoryMappedFile]::OpenExisting($mapName)
+                $accessor = $mmf.CreateViewAccessor(0, 0)
+
+                $numParticipants = $accessor.ReadInt32($OFFSET_NUM_PARTICIPANTS)
+                $viewedIndex = $accessor.ReadInt32($OFFSET_VIEWED_PARTICIPANT_INDEX)
+
+                $standings = @()
+                for ($i = 0; $i -lt $numParticipants; $i++) {
+                    $base = $OFFSET_PARTICIPANT_INFO_START + ($i * $PARTICIPANT_INFO_SIZE)
+                    $isActive = $accessor.ReadByte($base) -ne 0
+                    if (-not $isActive) { continue }
+
+                    $name = Read-CString $accessor ($base + 1) 64
+                    $racePosition = $accessor.ReadUInt32($base + 84)
+                    $lapsCompleted = $accessor.ReadUInt32($base + 88)
+                    $currentLap = $accessor.ReadUInt32($base + 92)
+
+                    $fastestLap = $accessor.ReadSingle($OFFSET_FASTEST_LAP_TIMES + ($i * 4))
+                    $lastLap = $accessor.ReadSingle($OFFSET_LAST_LAP_TIMES + ($i * 4))
+                    $speed = $accessor.ReadSingle($OFFSET_SPEEDS + ($i * 4))
+
+                    $standings += [PSCustomObject]@{
+                        position      = [int]$racePosition
+                        name          = $name
+                        lapsCompleted = [int]$lapsCompleted
+                        currentLap    = [int]$currentLap
+                        lastLapMs     = if ($lastLap -gt 0) { [int]($lastLap * 1000) } else { $null }
+                        fastestLapMs  = if ($fastestLap -gt 0) { [int]($fastestLap * 1000) } else { $null }
+                        speedKmh      = [math]::Round($speed * 3.6, 1)
+                        isPlayer      = ($i -eq $viewedIndex)
+                    }
+                }
+
+                $accessor.Dispose()
+                $mmf.Dispose()
+
+                $standingsSorted = @($standings | Sort-Object position)
+                $json = ConvertTo-Json -InputObject $standingsSorted -Compress -Depth 3
+
+                $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $lengthBytes = [BitConverter]::GetBytes([int32]$payloadBytes.Length)
+                if ([BitConverter]::IsLittleEndian) { [Array]::Reverse($lengthBytes) }
+
+                $stream.Write($lengthBytes, 0, 4)
+                $stream.Write($payloadBytes, 0, $payloadBytes.Length)
+            }
+            catch {
+                Write-Host "Sem dados agora (jogo fechado ou no menu?):" $_.Exception.Message
+            }
+
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    catch {
+        Write-Host "Bridge: sem conexao com o Node, tentando de novo em 2s..." $_.Exception.Message
+        Start-Sleep -Seconds 2
+    }
+}

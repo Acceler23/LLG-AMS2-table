@@ -1,0 +1,15 @@
+{
+  "name": "ams2-overlay",
+  "version": "0.1.0",
+  "description": "Overlay custom para AMS2 com ponte WebSocket e integracao OBS",
+  "main": "server/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.0",
+    "obs-websocket-js": "^5.0.6"
+  }
+}
