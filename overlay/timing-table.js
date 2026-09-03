@@ -1,24 +1,3 @@
-// overlay/timing-table.js
-//
-// Espera receber do servidor mensagens do tipo:
-//   { type: "standings", data: [ { position, name, currentLap, lastLapMs, fastestLapMs, isPlayer }, ... ] }
-// Isso vem direto do listener.ps1, que le a Shared Memory do AMS2.
-//
-// Cor (por classe) e logo (por carro) vem de overlay/drivers-config.js.
-//
-// Atalhos de teclado "," e "." trocam a coluna da direita entre os modos
-// disponiveis (Intervalo / Ultima volta / Melhor volta / Posicoes ganhas-perdidas).
-// Atalhos "[" e "]" trocam a pagina entre Geral / Multiclasse / Minha classe.
-// Atalho "p" liga/desliga o destaque de "voce" (util quando esta so'
-// espectando, ja que o jogo nao diz se voce esta pilotando ou so' assistindo).
-//
-// "Posicoes" compara com a posicao de cada piloto na primeira mensagem
-// recebida apos abrir a pagina -- recarregue a overlay no grid de largada
-// pra esse numero refletir a corrida certinho desde o inicio.
-//
-// Pra já visualizar o layout no OBS antes de ligar a telemetria real,
-// adicione ?demo=1 na URL do Browser Source.
-
 const params = new URLSearchParams(location.search);
 const DEMO = params.get("demo") === "1";
 
@@ -58,9 +37,26 @@ function ensureBaselines(standings) {
 }
 
 function positionChange(entry, displayPosition, isClassMode) {
-  const baseline = isClassMode ? startInClass : startOverall;
-  if (!baseline || !baseline.has(entry.name)) return null;
-  return baseline.get(entry.name) - displayPosition; // positivo = ganhou posicoes
+  if (isClassMode) {
+    if (!startInClass || !startInClass.has(entry.name)) return null;
+    return startInClass.get(entry.name) - displayPosition;
+  }
+  if (!startOverall || !startOverall.has(entry.name)) return null;
+  return startOverall.get(entry.name) - entry.position;
+}
+
+function isSafetyCar(entry) {
+  const cls = (entry.carClass || "").toLowerCase();
+  const name = (entry.carName || "").toLowerCase();
+  return cls === "safetycar" || name.includes("safety");
+}
+
+function isObserver(entry) {
+  if (!entry.inRace) return false;
+  if (entry.lapsCompleted > 0) return false;
+  if (entry.pitMode === 4 || entry.pitMode === 2) return true;
+  if (entry.raceState === 0 || entry.raceState === 1) return true;
+  return false;
 }
 
 function connect() {
@@ -69,9 +65,9 @@ function connect() {
     const msg = JSON.parse(event.data);
     if (msg.type === "standings") {
       const payload = msg.data;
-      // aceita tanto o formato novo ({session, standings}) quanto uma lista pura (modo demo)
-      const standings = Array.isArray(payload) ? payload : payload.standings || [];
+      const raw = Array.isArray(payload) ? payload : payload.standings || [];
       const session = Array.isArray(payload) ? null : payload.session;
+      const standings = raw.filter((e) => !isSafetyCar(e) && !isObserver(e));
 
       latestStandings = standings;
       updateSessionHeader(session);
@@ -95,6 +91,9 @@ function updateSessionHeader(session) {
       : `${m}:${String(s).padStart(2, "0")}`;
     document.getElementById("sessionTimer").textContent = text;
   }
+
+  const table = document.getElementById("timing-table");
+  if (table) table.classList.toggle("sc-out", !!session.scOut);
 }
 
 function formatClassName(raw) {
@@ -109,8 +108,10 @@ function formatClassName(raw) {
 }
 
 function classColor(carClass) {
+  if (typeof CLASS_COLORS === "undefined") return DEFAULT_COLOR;
+  if (CLASS_COLORS[carClass]) return CLASS_COLORS[carClass];
   const formatted = formatClassName(carClass);
-  return (typeof CLASS_COLORS !== "undefined" && CLASS_COLORS[formatted]) || DEFAULT_COLOR;
+  return CLASS_COLORS[formatted] || DEFAULT_COLOR;
 }
 
 // Nao existe campo na Shared Memory que diga "estou so' assistindo" --
@@ -133,39 +134,131 @@ function carLogo(carName) {
 }
 
 function rightColumnValue(entry, change, leaderDistance) {
+  if (isDnf(entry)) return { text: "DNF", cls: "pos-down" };
+
+  const pit = updatePitTimer(entry);
+  if (pit && (pit.phase === "in" || pit.phase === "out")) {
+    const elapsed = Date.now() - pit.enteredAt;
+    return { text: formatPitDuration(elapsed), cls: "pit-time", pitPhase: pit.phase };
+  }
+
   const mode = RIGHT_COLUMN_MODES[rightColumnIndex];
+  let result;
   if (mode === "Intervalo") {
-    return formatGap(entry, leaderDistance);
+    result = formatGap(entry, leaderDistance, change);
+  } else if (mode === "Última volta") {
+    result = { text: entry.lastLapMs ? formatTime(entry.lastLapMs) : "--:--.---", cls: "" };
+  } else if (mode === "Melhor volta") {
+    result = { text: entry.fastestLapMs ? formatTime(entry.fastestLapMs) : "--:--.---", cls: "" };
+  } else if (mode === "Posições") {
+    result = formatPosChange(change);
+  } else {
+    result = { text: "-", cls: "" };
   }
-  if (mode === "Última volta") {
-    return entry.lastLapMs ? formatTime(entry.lastLapMs) : "--:--.---";
+
+  if (pit && pit.phase === "done") {
+    result.pitPhase = "done";
   }
-  if (mode === "Melhor volta") {
-    return entry.fastestLapMs ? formatTime(entry.fastestLapMs) : "--:--.---";
-  }
-  if (mode === "Posições") {
-    if (change === null || change === undefined) return "-";
-    if (change === 0) return "=";
-    return change > 0 ? `▲${change}` : `▼${Math.abs(change)}`;
-  }
-  return "-";
+  return result;
 }
 
 // Estimativa de intervalo baseada em distancia percorrida (a Shared Memory
 // nao entrega o gap pronto). E' uma aproximacao usada por varias ferramentas
 // da comunidade quando so' se tem posicao/distancia -- nao e' tao preciso
 // quanto uma medicao de linha de tempo real, mas da uma nocao boa ao vivo.
-function formatGap(entry, leaderDistance) {
-  if (typeof leaderDistance !== "number" || typeof entry.totalDistance !== "number") return "-";
-  if (!entry.lapsCompleted && entry.currentLap <= 1) return "-"; // ainda no grid/1a volta, numero pouco confiavel
-  if (!entry.speedMs || entry.speedMs < 2) return "-"; // parado (grid, pit) -- evita divisao por quase-zero
+const garageSince = new Map();
+const pitTimers = new Map();
 
-  const distanceBehind = leaderDistance - entry.totalDistance;
-  if (distanceBehind <= 0.5) return "Líder";
+function isInPit(entry) {
+  return entry.pitMode === 1 || entry.pitMode === 2;
+}
+
+function isExitingPit(entry) {
+  return entry.pitMode === 3;
+}
+
+function updatePitTimer(entry) {
+  const name = entry.name;
+  const now = Date.now();
+  let st = pitTimers.get(name);
+
+  if (isInPit(entry) || isExitingPit(entry)) {
+    if (!st || st.phase === "done") {
+      st = { enteredAt: now, phase: "in", finalMs: null, exitLap: null };
+    } else {
+      st.phase = isExitingPit(entry) ? "out" : "in";
+    }
+    pitTimers.set(name, st);
+    return st;
+  }
+
+  if (st && (st.phase === "in" || st.phase === "out")) {
+    st.finalMs = now - st.enteredAt;
+    st.phase = "done";
+    st.exitLap = entry.currentLap ?? entry.lapsCompleted ?? 0;
+    pitTimers.set(name, st);
+    return st;
+  }
+
+  if (st && st.phase === "done") {
+    const lap = entry.currentLap ?? entry.lapsCompleted ?? 0;
+    if (lap > st.exitLap) {
+      pitTimers.delete(name);
+      return null;
+    }
+    return st;
+  }
+  return st || null;
+}
+
+function formatPitDuration(ms) {
+  const totalSec = ms / 1000;
+  if (totalSec < 60) return totalSec.toFixed(1) + "s";
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${s.toFixed(1).padStart(4, "0")}`;
+}
+
+function isDnf(entry) {
+  if (entry.raceState === 6 || entry.raceState === 5 || entry.raceState === 4) return true;
+  if (!entry.inRace || entry.lapsCompleted < 1) return false;
+  if (entry.pitMode !== 4) {
+    garageSince.delete(entry.name);
+    return false;
+  }
+  const now = Date.now();
+  if (!garageSince.has(entry.name)) garageSince.set(entry.name, now);
+  return now - garageSince.get(entry.name) >= 120000;
+}
+
+function formatPosChange(change) {
+  if (change === null || change === undefined) return { text: "-", cls: "" };
+  if (change === 0) return { text: "=", cls: "pos-eq" };
+  if (change > 0) return { text: `▲${change}`, cls: "pos-up" };
+  return { text: `▼${Math.abs(change)}`, cls: "pos-down" };
+}
+
+function formatGap(entry, aheadDistance, change) {
+  if (isDnf(entry)) return { text: "DNF", cls: "pos-down" };
+  const firstLap = !entry.lapsCompleted || entry.currentLap <= 1;
+  if (firstLap) return formatPosChange(change);
+
+  if (typeof entry.splitAhead === "number" && entry.splitAhead >= 0) {
+    return { text: `+${entry.splitAhead.toFixed(1)}`, cls: "" };
+  }
+  if (typeof aheadDistance !== "number" || typeof entry.totalDistance !== "number") {
+    if (aheadDistance === null || aheadDistance === undefined) {
+      return { text: entry.currentLap != null ? `Volta ${entry.currentLap}` : "-", cls: "" };
+    }
+    return { text: "-", cls: "" };
+  }
+  if (!entry.speedMs || entry.speedMs < 2) return { text: "-", cls: "" };
+
+  const distanceBehind = aheadDistance - entry.totalDistance;
+  if (distanceBehind <= 0.5) return { text: `Volta ${entry.currentLap ?? 0}`, cls: "" };
 
   const gapSeconds = distanceBehind / entry.speedMs;
-  //return `+${gapSeconds.toFixed(1)}`;
-  return (entry.splitAhead)
+  return { text: `+${gapSeconds.toFixed(1)}`, cls: "" };
 }
 
 function buildDisplayList(standings) {
@@ -230,12 +323,13 @@ function render(standings) {
   const bestOverall = Math.min(
     ...standings.map((e) => e.fastestLapMs).filter((v) => typeof v === "number" && v > 0)
   );
+  const mode = RIGHT_COLUMN_MODES[rightColumnIndex];
 
   while (container.children.length > displayList.length) {
     container.removeChild(container.lastChild);
   }
 
-  let currentLeaderDistance = null;
+  let prevDistance = null;
 
   displayList.forEach((item, i) => {
     let el = container.children[i];
@@ -250,11 +344,13 @@ function render(standings) {
         el = fresh;
       }
       el.textContent = formatClassName(item.label);
-      currentLeaderDistance = null; // proximo grupo tem seu proprio lider
+      const hClr = classColor(item.label);
+      el.style.borderLeftColor = hClr;
+      el.style.background = hClr;
+      el.style.color = "#fff";
+      prevDistance = null;
       return;
     }
-
-    if (currentLeaderDistance === null) currentLeaderDistance = item.entry.totalDistance;
 
     if (!el || el.dataset.kind !== "row") {
       const fresh = document.createElement("div");
@@ -262,7 +358,7 @@ function render(standings) {
       fresh.dataset.kind = "row";
       fresh.innerHTML = `
         <span class="col pos"></span>
-        <span class="col name"><img class="logo" style="display:none" /><span class="name-text"></span></span>
+        <span class="col name"><img class="logo" style="display:none" /><span class="name-text"></span><span class="pit-badge" style="display:none">P</span></span>
         <span class="col right-value"></span>
       `;
       if (el) container.replaceChild(fresh, el);
@@ -271,18 +367,46 @@ function render(standings) {
     }
 
     const entry = item.entry;
-    const changedName = el.dataset.name && el.dataset.name !== entry.name;
+    const prevPos = el.dataset.pos ? parseInt(el.dataset.pos, 10) : null;
+    const posChanged = prevPos !== null && prevPos !== item.displayPosition;
 
-    el.classList.toggle("player", playerHighlightEnabled && !!entry.isPlayer);
-    el.classList.toggle("fastest", showLapHighlight && entry.fastestLapMs === bestOverall);
-    el.style.borderLeftColor = classColor(entry.carClass);
-    if (changedName) {
-      el.classList.remove("moved");
+    const isDriving = entry.isPlayer && (
+      !entry.inRace ||
+      entry.lapsCompleted > 0 ||
+      entry.pitMode === 0 ||
+      entry.pitMode === 3 ||
+      entry.pitMode === 5
+    );
+
+    el.classList.toggle("player", playerHighlightEnabled && isDriving);
+    el.classList.toggle("dnf", isDnf(entry));
+    let isPurple = false;
+    if (showLapHighlight && typeof bestOverall === "number" && isFinite(bestOverall)) {
+      if (mode === "Melhor volta") isPurple = entry.fastestLapMs === bestOverall;
+      else if (mode === "Última volta") isPurple = entry.lastLapMs === bestOverall;
+    }
+    el.classList.toggle("fastest", isPurple);
+    const clr = classColor(entry.carClass);
+    el.style.borderTopColor = clr;
+    const scOut = document.getElementById("timing-table")?.classList.contains("sc-out");
+    if (scOut) {
+      el.style.backgroundColor = el.classList.contains("player") ? "#f0c400" : "#d4a800";
+    } else {
+      el.style.backgroundColor = el.classList.contains("player") ? "#006bdd" : "#0e42a5";
+    }
+    const posEl = el.querySelector(".pos");
+    posEl.style.background = clr;
+    posEl.style.color = "#fff";
+
+    el.classList.remove("flash-up", "flash-down");
+    if (posChanged) {
+      const gained = item.displayPosition < prevPos;
       void el.offsetWidth;
-      el.classList.add("moved");
+      el.classList.add(gained ? "flash-up" : "flash-down");
     }
 
     el.dataset.name = entry.name;
+    el.dataset.pos = String(item.displayPosition);
 
     const logoFile = carLogo(entry.carName);
     const logoImg = el.querySelector(".logo");
@@ -294,10 +418,28 @@ function render(standings) {
     }
 
     const change = positionChange(entry, item.displayPosition, isClassMode);
-
-    el.querySelector(".pos").textContent = item.displayPosition;
+    const gapRef = prevDistance;
+    posEl.textContent = item.displayPosition;
     el.querySelector(".name-text").textContent = entry.name;
-    el.querySelector(".right-value").textContent = rightColumnValue(entry, change, currentLeaderDistance);
+    const rv = rightColumnValue(entry, change, gapRef);
+    const rvEl = el.querySelector(".right-value");
+    rvEl.textContent = rv.text;
+    rvEl.className = "col right-value" + (rv.cls ? ` ${rv.cls}` : "");
+
+    const badge = el.querySelector(".pit-badge");
+    if (rv.pitPhase === "in" || rv.pitPhase === "out") {
+      badge.style.display = "";
+      badge.textContent = "P";
+      badge.className = "pit-badge pit-in";
+    } else if (rv.pitPhase === "done") {
+      badge.style.display = "";
+      badge.textContent = "OUT";
+      badge.className = "pit-badge pit-out";
+    } else {
+      badge.style.display = "none";
+      badge.className = "pit-badge";
+    }
+    prevDistance = entry.totalDistance;
   });
 }
 
@@ -326,6 +468,10 @@ document.addEventListener("keydown", (e) => {
     render(latestStandings);
   }
 });
+
+setInterval(() => {
+  if (pitTimers.size > 0 && latestStandings.length) render(latestStandings);
+}, 200);
 
 if (DEMO) {
   latestStandings = [

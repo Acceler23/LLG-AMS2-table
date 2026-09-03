@@ -19,8 +19,11 @@ $OFFSET_NUM_PARTICIPANTS         = 24
 $OFFSET_EVENT_TIME_REMAINING     = 6740  # float -- o header diz "milli-seconds" mas o valor observado bate mais com SEGUNDOS; ajustando com base no teste
 $OFFSET_PARTICIPANT_INFO_START   = 28
 $PARTICIPANT_INFO_SIZE           = 100   # sizeof(ParticipantInfo)
+$OFFSET_SPLIT_TIME_AHEAD         = 6728  # float, so do carro local/viewed
 $OFFSET_FASTEST_LAP_TIMES        = 8944  # float[64]
 $OFFSET_LAST_LAP_TIMES           = 9200  # float[64]
+$OFFSET_RACE_STATES              = 9520  # uint[64]
+$OFFSET_PIT_MODES                = 9776  # uint[64]
 $OFFSET_SPEEDS                   = 10800 # float[64]
 $OFFSET_CAR_NAMES                = 11056 # char[64][64]
 $OFFSET_CAR_CLASS_NAMES          = 15152 # char[64][64]
@@ -54,14 +57,14 @@ while ($true) {
                 $sessionState = $accessor.ReadUInt32($OFFSET_SESSION_STATE)
                 $timeRemainingSec = [int]$accessor.ReadSingle($OFFSET_EVENT_TIME_REMAINING)
                 $trackLength = $accessor.ReadSingle($OFFSET_TRACK_LENGTH)
+                $splitAhead = $accessor.ReadSingle($OFFSET_SPLIT_TIME_AHEAD)
+                $inRace = ($sessionState -eq 5)
 
                 $standings = @()
                 for ($i = 0; $i -lt $numParticipants; $i++) {
                     $base = $OFFSET_PARTICIPANT_INFO_START + ($i * $PARTICIPANT_INFO_SIZE)
                     $isActive = $accessor.ReadByte($base) -ne 0
                     $racePosition = $accessor.ReadUInt32($base + 84)
-                    # mRacePosition tem UNSET=0 (piloto nao esta de fato correndo:
-                    # espectador, fora da sessao, DNS etc) -- filtra igual o SimHub faz
                     if (-not $isActive -or $racePosition -eq 0) { continue }
 
                     $name = Read-CString $accessor ($base + 1) 64
@@ -74,8 +77,13 @@ while ($true) {
                     $speed = $accessor.ReadSingle($OFFSET_SPEEDS + ($i * 4))
                     $carName = Read-CString $accessor ($OFFSET_CAR_NAMES + ($i * 64)) 64
                     $carClass = Read-CString $accessor ($OFFSET_CAR_CLASS_NAMES + ($i * 64)) 64
+                    $pitMode = $accessor.ReadUInt32($OFFSET_PIT_MODES + ($i * 4))
+                    $raceState = $accessor.ReadUInt32($OFFSET_RACE_STATES + ($i * 4))
 
-                    $standings += [PSCustomObject]@{
+                    if ($inRace -and $raceState -eq 0) { continue }
+                    if ($inRace -and [int]$lapsCompleted -eq 0 -and ($pitMode -eq 4 -or $pitMode -eq 2)) { continue }
+
+                    $entry = [PSCustomObject]@{
                         position      = [int]$racePosition
                         name          = $name
                         carName       = $carName
@@ -88,7 +96,14 @@ while ($true) {
                         speedKmh      = [math]::Round($speed * 3.6, 1)
                         speedMs       = [math]::Round($speed, 2)
                         isPlayer      = ($i -eq $viewedIndex)
+                        pitMode       = [int]$pitMode
+                        raceState     = [int]$raceState
+                        inRace        = $inRace
                     }
+                    if ($i -eq $viewedIndex -and $splitAhead -ge 0) {
+                        $entry | Add-Member -NotePropertyName splitAhead -NotePropertyValue ([math]::Round($splitAhead, 2))
+                    }
+                    $standings += $entry
                 }
 
                 $accessor.Dispose()
@@ -96,10 +111,20 @@ while ($true) {
 
                 $standingsSorted = @($standings | Sort-Object position)
 
+                $scOut = $false
+                foreach ($e in $standings) {
+                    $cls = if ($e.carClass) { $e.carClass.ToLower() } else { "" }
+                    $cn = if ($e.carName) { $e.carName.ToLower() } else { "" }
+                    if ($cls -eq "safetycar" -or $cn -like "*safety*") {
+                        if ($e.pitMode -ne 2 -and $e.pitMode -ne 4) { $scOut = $true }
+                    }
+                }
+
                 $payload = [PSCustomObject]@{
                     session = [PSCustomObject]@{
-                        label           = $SESSION_LABELS[[int]$sessionState]
+                        label            = $SESSION_LABELS[[int]$sessionState]
                         timeRemainingSec = $timeRemainingSec
+                        scOut            = $scOut
                     }
                     standings = $standingsSorted
                 }
