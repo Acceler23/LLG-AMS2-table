@@ -10,57 +10,120 @@ html, body {
   position: absolute;
   top: 24px;
   right: 24px;
-  width: 420px;
-  background: rgba(8, 8, 10, 0.72);
-  border-radius: 8px;
+  width: 400px;
+  background: #0e3a66;
+  border-radius: 10px;
   overflow: hidden;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.5);
 }
 
-.header, .row {
-  display: grid;
-  grid-template-columns: 40px 1fr 55px 90px 90px;
-  align-items: center;
-  padding: 6px 12px;
+.title-bar {
+  background: #082647;
+  padding: 10px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.title-text {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.title-timer {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
 }
 
 .header {
-  background: rgba(255, 40, 40, 0.85);
-  font-size: 11px;
+  display: grid;
+  grid-template-columns: 50px 1fr 90px;
+  padding: 6px 16px 6px 20px;
+  font-size: 12px;
   font-weight: 700;
-  text-transform: uppercase;
+  color: #7fe0c8;
   letter-spacing: 0.5px;
 }
 
-.row {
-  font-size: 14px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  transition: background 0.2s ease;
+.header .pos {
+  overflow: visible;
+  white-space: nowrap;
 }
 
-.row:nth-child(even) {
-  background: rgba(255,255,255,0.03);
+.class-header {
+  background: rgba(0,0,0,0.35);
+  color: #7fe0c8;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 4px 16px;
+  letter-spacing: 0.5px;
+}
+
+.header .right {
+  text-align: right;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 50px 1fr 90px;
+  align-items: center;
+  padding: 6px 16px 6px 12px;
+  font-size: 14px;
+  border-left: 4px solid #3a5a8c; /* cor da classe do carro */
+}
+
+.row:nth-child(odd) {
+  background: rgba(255,255,255,0.05);
 }
 
 .row.player {
-  background: rgba(255, 200, 0, 0.18);
+  background: rgba(70, 150, 255, 0.35);
   font-weight: 700;
 }
 
-.row.fastest .last {
-  color: #b400ff;
+.pos {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.name .logo {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.right-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.row.fastest .right-value {
+  color: #d24bff;
   font-weight: 700;
 }
 
-.pos { font-weight: 700; opacity: 0.9; }
-.lap { opacity: 0.75; text-align: center; }
-.last { font-variant-numeric: tabular-nums; }
-.best { font-variant-numeric: tabular-nums; text-align: center; }
-
-/* animação simples quando a posição muda */
+/* animacao simples quando a posicao muda */
 .row.moved {
   animation: flash 0.6s ease;
 }
 @keyframes flash {
-  from { background: rgba(255,255,255,0.25); }
+  from { background: rgba(255,255,255,0.3); }
 }

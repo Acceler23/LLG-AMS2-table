@@ -7,16 +7,19 @@
 </head>
 <body>
   <div id="timing-table">
+    <div class="title-bar">
+      <span class="title-text" id="sessionLabel">CORRIDA</span>
+      <span class="title-timer" id="sessionTimer">--:--</span>
+    </div>
     <div class="header">
-      <span class="col pos">POS</span>
-      <span class="col name">PILOTO</span>
-      <span class="col lap">VOLTA</span>
-      <span class="col last">ÚLT. VOLTA</span>
-      <span class="col best">MELHOR</span>
+      <span class="col pos" id="pageLabel">Geral</span>
+      <span class="col name"></span>
+      <span class="col right" id="rightColumnLabel">Intervalo</span>
     </div>
     <div id="rows"></div>
   </div>
 
+  <script src="drivers-config.js"></script>
   <script src="timing-table.js"></script>
 </body>
 </html>

@@ -52,6 +52,42 @@ Depois:
 - Painel de controle (opcional, outra aba/janela): `http://localhost:8080/panel/panel.html`.
 - Se for usar a integração com OBS: Ferramentas > WebSocket Server Settings no OBS, habilitar e copiar host/senha para as variáveis de ambiente `OBS_WS_URL` / `OBS_WS_PASSWORD`.
 
+## Personalizar cor por classe e logo por carro
+
+Edite `overlay/drivers-config.js`:
+- `CLASS_NAME_OVERRIDES`: para classes que não seguem o padrão `PALAVRA_PALAVRA` (sufixos `_LD`/`_HD`/`_SW` são removidos e `_` vira espaço automaticamente -- use isso só quando o nome cru for completamente diferente do esperado).
+- `CLASS_COLORS`: cor da barra lateral de cada linha, usando o nome **já formatado** como chave.
+- `CAR_LOGOS`: logo exibida ao lado do nome, pela primeira palavra de `carName` (nome da montadora).
+
+Pra descobrir os nomes exatos de `carClass`/`carName` da sua liga/mod, abra o
+DevTools do navegador (F12 → Console) na página da tabela (sem `?demo=1`) e
+digite `latestStandings.map(e => [e.carClass, e.carName])`.
+
+Coloque os arquivos de logo dentro de `overlay/assets/logos/`.
+
+## Atalhos de teclado
+
+Com a janela do Browser Source em foco (ou no navegador direto):
+- `,` e `.` trocam a coluna da direita entre Intervalo / Última volta / Melhor volta / Posições ganhas-perdidas.
+- `[` e `]` trocam a página entre **Geral** (todo mundo junto), **Multiclasse** (agrupado por classe, com subtítulo e posição recalculada dentro da classe) e a classe do piloto que você está assistindo (mostra o nome real da classe).
+- `p` liga/desliga o destaque de "você" -- útil quando está só espectando (o jogo não diferencia pilotando de espectando, só qual carro a câmera está olhando).
+
+**Intervalo**: calculado por estimativa de distância percorrida (a Shared
+Memory não entrega o gap pronto, então isso é uma aproximação -- parecida
+com o que várias ferramentas da comunidade fazem, mas não é tão precisa
+quanto uma medição de linha de tempo oficial). Fica em branco no grid/pit
+(carro parado) e antes da 1ª volta.
+
+**Posições ganhas/perdidas**: compara com a posição de cada piloto na primeira
+mensagem recebida depois que a página é aberta -- recarregue a overlay no
+grid de largada pra esse número refletir a corrida certinho desde o início.
+No modo Multiclasse/Minha classe, a comparação é feita dentro da própria
+classe; no modo Geral, é a posição geral.
+
+**Sobre número de paradas**: a Shared Memory do AMS2 só expõe isso pro seu
+próprio carro, não pros adversários -- não tem como montar essa coluna pra
+grade toda com os dados disponíveis.
+
 ## Tabela de tempos
 
 Mostra Posição, Piloto, Volta atual, Última volta e Melhor volta, com destaque
