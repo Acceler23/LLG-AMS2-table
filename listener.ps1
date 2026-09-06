@@ -28,8 +28,20 @@ $OFFSET_SPEEDS                   = 10800 # float[64]
 $OFFSET_CAR_NAMES                = 11056 # char[64][64]
 $OFFSET_CAR_CLASS_NAMES          = 15152 # char[64][64]
 $OFFSET_TRACK_LENGTH             = 6704  # float, metros (unico, nao por participante)
+$OFFSET_LAPS_IN_EVENT            = 6572  # uint, total de voltas (0 = corrida por tempo)
+$OFFSET_FUEL_LEVEL               = 6840  # float 0-1, so local
+$OFFSET_FUEL_CAPACITY            = 6844  # float litros, so local
+$OFFSET_TYRE_COMPOUND            = 19388 # char[4][40], so local
+$OFFSET_CUR_SECTOR1              = 7408  # float[64]
+$OFFSET_CUR_SECTOR2              = 7664
+$OFFSET_CUR_SECTOR3              = 7920
+$OFFSET_FAST_SECTOR1             = 8176  # float[64]
+$OFFSET_FAST_SECTOR2             = 8432
+$OFFSET_FAST_SECTOR3             = 8688
 
-$SESSION_LABELS = @{ 0="INVÁLIDA"; 1="TREINO LIVRE"; 2="TESTE"; 3="CLASSIFICAÇÃO"; 4="VOLTA DE FORMAÇÃO"; 5="CORRIDA"; 6="TIME ATTACK" }
+$SESSION_LABELS = @{ 0="INVALIDA"; 1="TREINO LIVRE"; 2="TESTE"; 3="CLASSIFICACAO"; 4="VOLTA DE FORMACAO"; 5="CORRIDA"; 6="TIME ATTACK" }
+
+$maxSpeedKmh = @{}
 
 function Read-CString($accessor, $offset, $maxLen) {
     $bytes = New-Object byte[] $maxLen
@@ -57,14 +69,27 @@ while ($true) {
                 $sessionState = $accessor.ReadUInt32($OFFSET_SESSION_STATE)
                 $timeRemainingSec = [int]$accessor.ReadSingle($OFFSET_EVENT_TIME_REMAINING)
                 $trackLength = $accessor.ReadSingle($OFFSET_TRACK_LENGTH)
+                $lapsInEvent = $accessor.ReadUInt32($OFFSET_LAPS_IN_EVENT)
                 $splitAhead = $accessor.ReadSingle($OFFSET_SPLIT_TIME_AHEAD)
                 $inRace = ($sessionState -eq 5)
 
                 $standings = @()
+                $scOut = $false
                 for ($i = 0; $i -lt $numParticipants; $i++) {
                     $base = $OFFSET_PARTICIPANT_INFO_START + ($i * $PARTICIPANT_INFO_SIZE)
                     $isActive = $accessor.ReadByte($base) -ne 0
                     $racePosition = $accessor.ReadUInt32($base + 84)
+
+                    $carName = Read-CString $accessor ($OFFSET_CAR_NAMES + ($i * 64)) 64
+                    $carClass = Read-CString $accessor ($OFFSET_CAR_CLASS_NAMES + ($i * 64)) 64
+                    $pitMode = $accessor.ReadUInt32($OFFSET_PIT_MODES + ($i * 4))
+
+                    $clsLow = if ($carClass) { $carClass.ToLower() } else { "" }
+                    $cnLow = if ($carName) { $carName.ToLower() } else { "" }
+                    if ($clsLow -eq "safetycar" -or $cnLow -like "*safety*") {
+                        if ($isActive -and $pitMode -eq 0) { $scOut = $true }
+                    }
+
                     if (-not $isActive -or $racePosition -eq 0) { continue }
 
                     $name = Read-CString $accessor ($base + 1) 64
@@ -75,13 +100,22 @@ while ($true) {
                     $fastestLap = $accessor.ReadSingle($OFFSET_FASTEST_LAP_TIMES + ($i * 4))
                     $lastLap = $accessor.ReadSingle($OFFSET_LAST_LAP_TIMES + ($i * 4))
                     $speed = $accessor.ReadSingle($OFFSET_SPEEDS + ($i * 4))
-                    $carName = Read-CString $accessor ($OFFSET_CAR_NAMES + ($i * 64)) 64
-                    $carClass = Read-CString $accessor ($OFFSET_CAR_CLASS_NAMES + ($i * 64)) 64
-                    $pitMode = $accessor.ReadUInt32($OFFSET_PIT_MODES + ($i * 4))
                     $raceState = $accessor.ReadUInt32($OFFSET_RACE_STATES + ($i * 4))
+                    $s1 = $accessor.ReadSingle($OFFSET_CUR_SECTOR1 + ($i * 4))
+                    $s2 = $accessor.ReadSingle($OFFSET_CUR_SECTOR2 + ($i * 4))
+                    $s3 = $accessor.ReadSingle($OFFSET_CUR_SECTOR3 + ($i * 4))
+                    $fs1 = $accessor.ReadSingle($OFFSET_FAST_SECTOR1 + ($i * 4))
+                    $fs2 = $accessor.ReadSingle($OFFSET_FAST_SECTOR2 + ($i * 4))
+                    $fs3 = $accessor.ReadSingle($OFFSET_FAST_SECTOR3 + ($i * 4))
 
                     if ($inRace -and $raceState -eq 0) { continue }
                     if ($inRace -and [int]$lapsCompleted -eq 0 -and ($pitMode -eq 4 -or $pitMode -eq 2)) { continue }
+                    if ($clsLow -eq "safetycar" -or $cnLow -like "*safety*") { continue }
+
+                    $speedKmh = [math]::Round($speed * 3.6, 1)
+                    if (-not $maxSpeedKmh.ContainsKey($name) -or $speedKmh -gt $maxSpeedKmh[$name]) {
+                        $maxSpeedKmh[$name] = $speedKmh
+                    }
 
                     $entry = [PSCustomObject]@{
                         position      = [int]$racePosition
@@ -93,15 +127,34 @@ while ($true) {
                         totalDistance = ([double]$lapsCompleted * $trackLength) + $currentLapDistance
                         lastLapMs     = if ($lastLap -gt 0) { [int]($lastLap * 1000) } else { $null }
                         fastestLapMs  = if ($fastestLap -gt 0) { [int]($fastestLap * 1000) } else { $null }
-                        speedKmh      = [math]::Round($speed * 3.6, 1)
+                        speedKmh      = $speedKmh
                         speedMs       = [math]::Round($speed, 2)
+                        maxSpeedKmh   = $maxSpeedKmh[$name]
                         isPlayer      = ($i -eq $viewedIndex)
                         pitMode       = [int]$pitMode
                         raceState     = [int]$raceState
                         inRace        = $inRace
+                        sector1Ms     = if ($s1 -gt 0) { [int]($s1 * 1000) } else { $null }
+                        sector2Ms     = if ($s2 -gt 0) { [int]($s2 * 1000) } else { $null }
+                        sector3Ms     = if ($s3 -gt 0) { [int]($s3 * 1000) } else { $null }
+                        bestSector1Ms = if ($fs1 -gt 0) { [int]($fs1 * 1000) } else { $null }
+                        bestSector2Ms = if ($fs2 -gt 0) { [int]($fs2 * 1000) } else { $null }
+                        bestSector3Ms = if ($fs3 -gt 0) { [int]($fs3 * 1000) } else { $null }
                     }
-                    if ($i -eq $viewedIndex -and $splitAhead -ge 0) {
-                        $entry | Add-Member -NotePropertyName splitAhead -NotePropertyValue ([math]::Round($splitAhead, 2))
+                    if ($i -eq $viewedIndex) {
+                        if ($splitAhead -ge 0) {
+                            $entry | Add-Member -NotePropertyName splitAhead -NotePropertyValue ([math]::Round($splitAhead, 2))
+                        }
+                        $fuelLevel = $accessor.ReadSingle($OFFSET_FUEL_LEVEL)
+                        $fuelCap = $accessor.ReadSingle($OFFSET_FUEL_CAPACITY)
+                        $tyre = Read-CString $accessor $OFFSET_TYRE_COMPOUND 40
+                        $entry | Add-Member -NotePropertyName fuelPct -NotePropertyValue ([math]::Round($fuelLevel * 100, 1))
+                        if ($fuelCap -gt 0) {
+                            $entry | Add-Member -NotePropertyName fuelL -NotePropertyValue ([math]::Round($fuelLevel * $fuelCap, 1))
+                        }
+                        if ($tyre) {
+                            $entry | Add-Member -NotePropertyName tyreCompound -NotePropertyValue $tyre
+                        }
                     }
                     $standings += $entry
                 }
@@ -111,19 +164,12 @@ while ($true) {
 
                 $standingsSorted = @($standings | Sort-Object position)
 
-                $scOut = $false
-                foreach ($e in $standings) {
-                    $cls = if ($e.carClass) { $e.carClass.ToLower() } else { "" }
-                    $cn = if ($e.carName) { $e.carName.ToLower() } else { "" }
-                    if ($cls -eq "safetycar" -or $cn -like "*safety*") {
-                        if ($e.pitMode -ne 2 -and $e.pitMode -ne 4) { $scOut = $true }
-                    }
-                }
-
                 $payload = [PSCustomObject]@{
                     session = [PSCustomObject]@{
+                        state            = [int]$sessionState
                         label            = $SESSION_LABELS[[int]$sessionState]
                         timeRemainingSec = $timeRemainingSec
+                        lapsInEvent      = [int]$lapsInEvent
                         scOut            = $scOut
                     }
                     standings = $standingsSorted

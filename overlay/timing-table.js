@@ -3,24 +3,75 @@ const DEMO = params.get("demo") === "1";
 
 const WS_URL = `ws://${location.hostname}:${location.port || 8080}/ws`;
 
-const RIGHT_COLUMN_MODES = ["Intervalo", "Última volta", "Melhor volta", "Posições"];
+const RIGHT_COLUMN_MODES = ["Intervalo", "Gap líder", "Última volta", "Melhor volta", "Posições", "Paradas", "Stint", "VMax"];
 let rightColumnIndex = 0;
 
 const PAGE_MODES = ["Geral", "Multiclasse", "Minha classe"];
-let pageIndex = 0;
+let pageIndex = 1;
 
 let latestStandings = [];
+let latestSessionLabel = null;
+let latestSessionState = null;
+let latestLapsInEvent = 0;
 
-// baseline de posicoes (capturada na primeira mensagem apos abrir a pagina --
-// atualize/recarregue a overlay no grid de largada pra isso refletir o
-// ganho/perda de posicoes da corrida certinho)
-let startOverall = null; // Map nome -> posicao geral inicial
-let startInClass = null; // Map nome -> posicao dentro da classe inicial
+function formatLapLabel(currentLap) {
+  const lap = currentLap != null ? currentLap : 0;
+  if (latestLapsInEvent > 0) return `Volta ${lap}/${latestLapsInEvent}`;
+  return `Volta ${lap}`;
+}
 
-function ensureBaselines(standings) {
+const SESSION_LABELS = {
+  0: "INVÁLIDA",
+  1: "TREINO LIVRE",
+  2: "TESTE",
+  3: "CLASSIFICAÇÃO",
+  4: "VOLTA DE FORMAÇÃO",
+  5: "CORRIDA",
+  6: "TIME ATTACK",
+};
+
+function isTimedSession() {
+  const st = Number(latestSessionState);
+  if (st === 1 || st === 2 || st === 3 || st === 6) return true;
+  if (st === 5) return false;
+  const lab = (latestSessionLabel || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return /TREINO|CLASSIFICA|TESTE|TIME ATTACK|ATTACK|QUAL/i.test(lab);
+}
+
+function isRaceSession() {
+  const st = Number(latestSessionState);
+  if (st === 5) return true;
+  if (st === 1 || st === 2 || st === 3 || st === 6 || st === 4) return false;
+  const lab = (latestSessionLabel || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (/TREINO|CLASSIFICA|TESTE|TIME ATTACK|ATTACK|QUAL|FORMACAO/i.test(lab)) return false;
+  return /CORRIDA/i.test(lab);
+}
+
+let startOverall = null;
+let startInClass = null;
+let baselineSession = null;
+let lastSessionLabel = null;
+
+function resetBaselines() {
+  startOverall = null;
+  startInClass = null;
+  baselineSession = null;
+}
+
+function ensureBaselines(standings, sessionLabel) {
+  if (sessionLabel && sessionLabel !== lastSessionLabel) {
+    lastSessionLabel = sessionLabel;
+    resetBaselines();
+  }
+
+  const onGrid = standings.length > 0 && standings.every((e) => !e.lapsCompleted || e.lapsCompleted === 0);
+  if (startOverall && onGrid) {
+    resetBaselines();
+  }
   if (startOverall) return;
 
   startOverall = new Map(standings.map((e) => [e.name, e.position]));
+  baselineSession = sessionLabel;
 
   const groups = {};
   standings.forEach((e) => {
@@ -70,6 +121,12 @@ function connect() {
       const standings = raw.filter((e) => !isSafetyCar(e) && !isObserver(e));
 
       latestStandings = standings;
+      if (session) {
+        latestSessionState = typeof session.state === "number" ? session.state : (session.state != null ? Number(session.state) : null);
+        if (Number.isNaN(latestSessionState)) latestSessionState = null;
+        latestSessionLabel = (latestSessionState != null && SESSION_LABELS[latestSessionState]) || session.label || null;
+        latestLapsInEvent = Number(session.lapsInEvent) || 0;
+      }
       updateSessionHeader(session);
       render(latestStandings);
     }
@@ -79,7 +136,8 @@ function connect() {
 
 function updateSessionHeader(session) {
   if (!session) return;
-  document.getElementById("sessionLabel").textContent = session.label || "CORRIDA";
+  const label = latestSessionLabel || SESSION_LABELS[session.state] || session.label || "CORRIDA";
+  document.getElementById("sessionLabel").textContent = label;
 
   const totalSeconds = session.timeRemainingSec;
   if (typeof totalSeconds === "number" && totalSeconds > 0) {
@@ -109,9 +167,28 @@ function formatClassName(raw) {
 
 function classColor(carClass) {
   if (typeof CLASS_COLORS === "undefined") return DEFAULT_COLOR;
-  if (CLASS_COLORS[carClass]) return CLASS_COLORS[carClass];
+  if (carClass && CLASS_COLORS[carClass]) return CLASS_COLORS[carClass];
   const formatted = formatClassName(carClass);
-  return CLASS_COLORS[formatted] || DEFAULT_COLOR;
+  if (formatted && CLASS_COLORS[formatted]) return CLASS_COLORS[formatted];
+  if (carClass) {
+    const noSpace = carClass.replace(/\s+/g, "_");
+    if (CLASS_COLORS[noSpace]) return CLASS_COLORS[noSpace];
+  }
+  if (typeof CLASS_NAME_OVERRIDES !== "undefined") {
+    for (const [raw, name] of Object.entries(CLASS_NAME_OVERRIDES)) {
+      if (name === formatted && CLASS_COLORS[raw]) return CLASS_COLORS[raw];
+    }
+  }
+  return DEFAULT_COLOR;
+}
+
+function sortByTiming(a, b) {
+  if (!isRaceSession()) {
+    const fa = a.fastestLapMs > 0 ? a.fastestLapMs : Infinity;
+    const fb = b.fastestLapMs > 0 ? b.fastestLapMs : Infinity;
+    if (fa !== fb) return fa - fb;
+  }
+  return a.position - b.position;
 }
 
 // Nao existe campo na Shared Memory que diga "estou so' assistindo" --
@@ -133,10 +210,24 @@ function carLogo(carName) {
   return CAR_LOGOS[manufacturerName(carName)] || CAR_LOGOS[carName];
 }
 
-function rightColumnValue(entry, change, leaderDistance) {
+function formatLeaderGap(entry, leaderDistance, bestFastestMs) {
+  if (!isRaceSession()) {
+    return formatQualGap(entry, bestFastestMs, true);
+  }
+  if (typeof leaderDistance !== "number" || typeof entry.totalDistance !== "number") return { text: "-", cls: "" };
+  if (!entry.lapsCompleted && entry.currentLap <= 1) return { text: "-", cls: "" };
+  if (!entry.speedMs || entry.speedMs < 2) return { text: "-", cls: "" };
+  const distanceBehind = leaderDistance - entry.totalDistance;
+  if (distanceBehind <= 0.5) return { text: "Líder", cls: "" };
+  const gapSeconds = distanceBehind / entry.speedMs;
+  return { text: `+${gapSeconds.toFixed(1)}`, cls: "" };
+}
+
+function rightColumnValue(entry, change, carAheadDistance, bestFastestMs, leaderDistance, aheadFastestMs) {
   if (isDnf(entry)) return { text: "DNF", cls: "pos-down" };
 
   const pit = updatePitTimer(entry);
+  const stats = updatePitStats(entry);
   if (pit && (pit.phase === "in" || pit.phase === "out")) {
     const elapsed = Date.now() - pit.enteredAt;
     return { text: formatPitDuration(elapsed), cls: "pit-time", pitPhase: pit.phase };
@@ -145,13 +236,21 @@ function rightColumnValue(entry, change, leaderDistance) {
   const mode = RIGHT_COLUMN_MODES[rightColumnIndex];
   let result;
   if (mode === "Intervalo") {
-    result = formatGap(entry, leaderDistance, change);
+    result = formatGap(entry, carAheadDistance, change, bestFastestMs, aheadFastestMs);
+  } else if (mode === "Gap líder") {
+    result = formatLeaderGap(entry, leaderDistance, bestFastestMs);
   } else if (mode === "Última volta") {
     result = { text: entry.lastLapMs ? formatTime(entry.lastLapMs) : "--:--.---", cls: "" };
   } else if (mode === "Melhor volta") {
     result = { text: entry.fastestLapMs ? formatTime(entry.fastestLapMs) : "--:--.---", cls: "" };
   } else if (mode === "Posições") {
     result = formatPosChange(change);
+  } else if (mode === "Paradas") {
+    result = { text: String(stats.stops), cls: "" };
+  } else if (mode === "Stint") {
+    result = { text: String(stats.stintLaps), cls: "" };
+  } else if (mode === "VMax") {
+    result = { text: entry.maxSpeedKmh != null ? `${Math.round(entry.maxSpeedKmh)}` : "-", cls: "" };
   } else {
     result = { text: "-", cls: "" };
   }
@@ -168,6 +267,67 @@ function rightColumnValue(entry, change, leaderDistance) {
 // quanto uma medicao de linha de tempo real, mas da uma nocao boa ao vivo.
 const garageSince = new Map();
 const pitTimers = new Map();
+const pitStats = new Map();
+const sectorState = new Map();
+
+function updateSectorDisplay(entry, classBestSectors) {
+  const name = entry.name;
+  let st = sectorState.get(name);
+  if (!st) {
+    st = { colors: [null, null, null], lastLap: entry.currentLap || 0, clearAt: 0 };
+    sectorState.set(name, st);
+  }
+
+  const lap = entry.currentLap || 0;
+  if (lap > st.lastLap) {
+    st.clearAt = Date.now() + 10000;
+    st.lastLap = lap;
+  }
+  if (st.clearAt && Date.now() >= st.clearAt) {
+    st.colors = [null, null, null];
+    st.clearAt = 0;
+  }
+
+  if (!isTimedSession() && isRaceSession()) {
+    return st.colors;
+  }
+
+  const cur = [entry.sector1Ms, entry.sector2Ms, entry.sector3Ms];
+  const best = [entry.bestSector1Ms, entry.bestSector2Ms, entry.bestSector3Ms];
+  const overall = classBestSectors || [null, null, null];
+
+  for (let i = 0; i < 3; i++) {
+    if (cur[i] > 0) {
+      if (overall[i] > 0 && cur[i] <= overall[i]) {
+        st.colors[i] = "purple";
+      } else if (best[i] > 0 && cur[i] <= best[i]) {
+        st.colors[i] = "green";
+      } else {
+        st.colors[i] = "yellow";
+      }
+    }
+  }
+  return st.colors;
+}
+
+function updatePitStats(entry) {
+  const name = entry.name;
+  let st = pitStats.get(name);
+  if (!st) {
+    st = { stops: 0, wasInPit: false, stintStartLap: entry.lapsCompleted || 0 };
+    pitStats.set(name, st);
+  }
+  const inPit = entry.pitMode === 1 || entry.pitMode === 2;
+  if (inPit && !st.wasInPit) {
+    st.stops += 1;
+    st.wasInPit = true;
+  } else if (!inPit && st.wasInPit) {
+    st.wasInPit = false;
+    st.stintStartLap = entry.lapsCompleted || 0;
+  }
+  st.stintLaps = Math.max(0, (entry.lapsCompleted || 0) - st.stintStartLap);
+  return st;
+}
 
 function isInPit(entry) {
   return entry.pitMode === 1 || entry.pitMode === 2;
@@ -238,8 +398,29 @@ function formatPosChange(change) {
   return { text: `▼${Math.abs(change)}`, cls: "pos-down" };
 }
 
-function formatGap(entry, aheadDistance, change) {
+function formatQualGap(entry, refFastestMs) {
+  const mine = Number(entry.fastestLapMs);
+  if (!mine || mine <= 0) {
+    const last = Number(entry.lastLapMs);
+    if (last > 0) return { text: formatTime(last), cls: "" };
+    return { text: "-", cls: "" };
+  }
+  const ref = Number(refFastestMs);
+  if (!ref || ref <= 0) {
+    return { text: formatTime(mine), cls: "fastest-gap" };
+  }
+  const delta = mine - ref;
+  if (delta <= 0) return { text: formatTime(mine), cls: "fastest-gap" };
+  return { text: `+${(delta / 1000).toFixed(3)}`, cls: "" };
+}
+
+function formatGap(entry, aheadDistance, change, bestFastestMs, aheadFastestMs) {
   if (isDnf(entry)) return { text: "DNF", cls: "pos-down" };
+
+  if (isTimedSession() || !isRaceSession()) {
+    return formatQualGap(entry, aheadFastestMs);
+  }
+
   const firstLap = !entry.lapsCompleted || entry.currentLap <= 1;
   if (firstLap) return formatPosChange(change);
 
@@ -248,14 +429,14 @@ function formatGap(entry, aheadDistance, change) {
   }
   if (typeof aheadDistance !== "number" || typeof entry.totalDistance !== "number") {
     if (aheadDistance === null || aheadDistance === undefined) {
-      return { text: entry.currentLap != null ? `Volta ${entry.currentLap}` : "-", cls: "" };
+      return { text: entry.currentLap != null ? formatLapLabel(entry.currentLap) : "-", cls: "" };
     }
     return { text: "-", cls: "" };
   }
   if (!entry.speedMs || entry.speedMs < 2) return { text: "-", cls: "" };
 
   const distanceBehind = aheadDistance - entry.totalDistance;
-  if (distanceBehind <= 0.5) return { text: `Volta ${entry.currentLap ?? 0}`, cls: "" };
+  if (distanceBehind <= 0.5) return { text: formatLapLabel(entry.currentLap ?? 0), cls: "" };
 
   const gapSeconds = distanceBehind / entry.speedMs;
   return { text: `+${gapSeconds.toFixed(1)}`, cls: "" };
@@ -264,7 +445,27 @@ function formatGap(entry, aheadDistance, change) {
 function buildDisplayList(standings) {
   const mode = PAGE_MODES[pageIndex];
 
+  function withAhead(rows) {
+    let prevFast = null;
+    return rows.map((item) => {
+      if (item.type !== "row") {
+        prevFast = null;
+        return item;
+      }
+      item.aheadFastestMs = prevFast;
+      const f = Number(item.entry.fastestLapMs);
+      if (f > 0) prevFast = f;
+      return item;
+    });
+  }
+
   if (mode === "Geral") {
+    if (!isRaceSession()) {
+      return withAhead(standings
+        .slice()
+        .sort(sortByTiming)
+        .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 })));
+    }
     return standings.map((e) => ({ type: "row", entry: e, displayPosition: e.position }));
   }
 
@@ -280,20 +481,20 @@ function buildDisplayList(standings) {
       list.push({ type: "header", label: cls });
       groups[cls]
         .slice()
-        .sort((a, b) => a.position - b.position)
+        .sort(sortByTiming)
         .forEach((e, i) => list.push({ type: "row", entry: e, displayPosition: i + 1 }));
     });
-    return list;
+    return withAhead(list);
   }
 
   if (mode === "Minha classe") {
     const viewed = standings.find((e) => e.isPlayer);
     const myClass = viewed ? viewed.carClass : null;
-    return standings
+    return withAhead(standings
       .filter((e) => e.carClass === myClass)
       .slice()
-      .sort((a, b) => a.position - b.position)
-      .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 }));
+      .sort(sortByTiming)
+      .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 })));
   }
 
   return [];
@@ -312,7 +513,7 @@ function render(standings) {
   document.getElementById("rightColumnLabel").textContent = RIGHT_COLUMN_MODES[rightColumnIndex];
   document.getElementById("pageLabel").textContent = currentPageLabel(standings);
 
-  ensureBaselines(standings);
+  ensureBaselines(standings, latestSessionLabel);
 
   const isClassMode = PAGE_MODES[pageIndex] !== "Geral";
   const showLapHighlight = RIGHT_COLUMN_MODES[rightColumnIndex] === "Última volta" || RIGHT_COLUMN_MODES[rightColumnIndex] === "Melhor volta";
@@ -320,16 +521,61 @@ function render(standings) {
   const displayList = buildDisplayList(standings);
   const container = document.getElementById("rows");
 
-  const bestOverall = Math.min(
-    ...standings.map((e) => e.fastestLapMs).filter((v) => typeof v === "number" && v > 0)
-  );
+  const bestOverallFastest = (() => {
+    const t = standings.map((e) => e.fastestLapMs).filter((v) => typeof v === "number" && v > 0);
+    return t.length ? Math.min(...t) : null;
+  })();
+  const bestOverallLast = (() => {
+    const t = standings.map((e) => e.lastLapMs).filter((v) => typeof v === "number" && v > 0);
+    return t.length ? Math.min(...t) : null;
+  })();
   const mode = RIGHT_COLUMN_MODES[rightColumnIndex];
+
+  const bestFastestByClass = {};
+  const bestLastByClass = {};
+  const bestSectorsByClass = {};
+  const bestSectorsOverall = [null, null, null];
+  standings.forEach((e) => {
+    const cls = e.carClass || "—";
+    if (e.fastestLapMs > 0 && (bestFastestByClass[cls] == null || e.fastestLapMs < bestFastestByClass[cls])) {
+      bestFastestByClass[cls] = e.fastestLapMs;
+    }
+    if (e.lastLapMs > 0 && (bestLastByClass[cls] == null || e.lastLapMs < bestLastByClass[cls])) {
+      bestLastByClass[cls] = e.lastLapMs;
+    }
+    if (!bestSectorsByClass[cls]) bestSectorsByClass[cls] = [null, null, null];
+    const bs = [e.bestSector1Ms, e.bestSector2Ms, e.bestSector3Ms];
+    for (let i = 0; i < 3; i++) {
+      if (bs[i] > 0 && (bestSectorsByClass[cls][i] == null || bs[i] < bestSectorsByClass[cls][i])) {
+        bestSectorsByClass[cls][i] = bs[i];
+      }
+      if (bs[i] > 0 && (bestSectorsOverall[i] == null || bs[i] < bestSectorsOverall[i])) {
+        bestSectorsOverall[i] = bs[i];
+      }
+    }
+  });
 
   while (container.children.length > displayList.length) {
     container.removeChild(container.lastChild);
   }
 
   let prevDistance = null;
+  let prevFastestMs = null;
+  let groupLeaderDistance = null;
+  let bestFastestMs = null;
+
+  const overallBestFastest = (() => {
+    const times = standings.map((e) => e.fastestLapMs).filter((v) => typeof v === "number" && v > 0);
+    return times.length ? Math.min(...times) : null;
+  })();
+
+  const overallLeaderDistance = (() => {
+    let maxD = null;
+    standings.forEach((e) => {
+      if (typeof e.totalDistance === "number" && (maxD === null || e.totalDistance > maxD)) maxD = e.totalDistance;
+    });
+    return maxD;
+  })();
 
   displayList.forEach((item, i) => {
     let el = container.children[i];
@@ -349,7 +595,27 @@ function render(standings) {
       el.style.background = hClr;
       el.style.color = "#fff";
       prevDistance = null;
+      prevFastestMs = null;
+      groupLeaderDistance = null;
+      const groupEntries = [];
+      for (let j = i + 1; j < displayList.length && displayList[j].type === "row"; j++) {
+        groupEntries.push(displayList[j].entry);
+      }
+      const times = groupEntries.map((e) => e.fastestLapMs).filter((v) => typeof v === "number" && v > 0);
+      bestFastestMs = times.length ? Math.min(...times) : null;
+      groupEntries.forEach((e) => {
+        if (typeof e.totalDistance === "number" && (groupLeaderDistance === null || e.totalDistance > groupLeaderDistance)) {
+          groupLeaderDistance = e.totalDistance;
+        }
+      });
       return;
+    }
+
+    if (bestFastestMs === null && !isClassMode) {
+      bestFastestMs = overallBestFastest;
+    }
+    if (groupLeaderDistance === null && !isClassMode) {
+      groupLeaderDistance = overallLeaderDistance;
     }
 
     if (!el || el.dataset.kind !== "row") {
@@ -358,7 +624,7 @@ function render(standings) {
       fresh.dataset.kind = "row";
       fresh.innerHTML = `
         <span class="col pos"></span>
-        <span class="col name"><img class="logo" style="display:none" /><span class="name-text"></span><span class="pit-badge" style="display:none">P</span></span>
+        <span class="col name"><img class="logo" style="display:none" /><span class="name-text"></span><span class="sectors"><i></i><i></i><i></i></span><span class="pit-badge" style="display:none">P</span></span>
         <span class="col right-value"></span>
       `;
       if (el) container.replaceChild(fresh, el);
@@ -381,19 +647,19 @@ function render(standings) {
     el.classList.toggle("player", playerHighlightEnabled && isDriving);
     el.classList.toggle("dnf", isDnf(entry));
     let isPurple = false;
-    if (showLapHighlight && typeof bestOverall === "number" && isFinite(bestOverall)) {
-      if (mode === "Melhor volta") isPurple = entry.fastestLapMs === bestOverall;
-      else if (mode === "Última volta") isPurple = entry.lastLapMs === bestOverall;
+    const cls = entry.carClass || "—";
+    const sessionBest = isClassMode ? bestFastestByClass[cls] : bestOverallFastest;
+    if (mode === "Melhor volta") {
+      isPurple = entry.fastestLapMs > 0 && entry.fastestLapMs === sessionBest;
+    } else if (mode === "Última volta") {
+      isPurple = entry.lastLapMs > 0 && sessionBest != null && entry.lastLapMs === sessionBest;
+    } else if (mode === "Intervalo" && !isRaceSession()) {
+      isPurple = false;
     }
     el.classList.toggle("fastest", isPurple);
     const clr = classColor(entry.carClass);
     el.style.borderTopColor = clr;
-    const scOut = document.getElementById("timing-table")?.classList.contains("sc-out");
-    if (scOut) {
-      el.style.backgroundColor = el.classList.contains("player") ? "#f0c400" : "#d4a800";
-    } else {
-      el.style.backgroundColor = el.classList.contains("player") ? "#006bdd" : "#0e42a5";
-    }
+    el.style.backgroundColor = el.classList.contains("player") ? "#006bdd" : "#0e42a5";
     const posEl = el.querySelector(".pos");
     posEl.style.background = clr;
     posEl.style.color = "#fff";
@@ -421,7 +687,11 @@ function render(standings) {
     const gapRef = prevDistance;
     posEl.textContent = item.displayPosition;
     el.querySelector(".name-text").textContent = entry.name;
-    const rv = rightColumnValue(entry, change, gapRef);
+    const rowBestFastest = (isClassMode && bestFastestByClass[entry.carClass || "—"] != null)
+      ? bestFastestByClass[entry.carClass || "—"]
+      : (bestFastestMs != null ? bestFastestMs : bestOverallFastest);
+    const aheadFast = item.aheadFastestMs != null ? item.aheadFastestMs : prevFastestMs;
+    const rv = rightColumnValue(entry, change, gapRef, rowBestFastest, groupLeaderDistance, aheadFast);
     const rvEl = el.querySelector(".right-value");
     rvEl.textContent = rv.text;
     rvEl.className = "col right-value" + (rv.cls ? ` ${rv.cls}` : "");
@@ -439,7 +709,24 @@ function render(standings) {
       badge.style.display = "none";
       badge.className = "pit-badge";
     }
+
+    const secWrap = el.querySelector(".sectors");
+    if (secWrap) {
+      const showSec = isTimedSession() || !isRaceSession();
+      secWrap.style.display = showSec ? "" : "none";
+      if (showSec) {
+        const classBest = isClassMode
+          ? (bestSectorsByClass[entry.carClass || "—"] || bestSectorsOverall)
+          : bestSectorsOverall;
+        const colors = updateSectorDisplay(entry, classBest);
+        const boxes = secWrap.querySelectorAll("i");
+        boxes.forEach((box, idx) => {
+          box.className = colors[idx] ? `sec-${colors[idx]}` : "";
+        });
+      }
+    }
     prevDistance = entry.totalDistance;
+    prevFastestMs = entry.fastestLapMs > 0 ? entry.fastestLapMs : prevFastestMs;
   });
 }
 
@@ -470,7 +757,8 @@ document.addEventListener("keydown", (e) => {
 });
 
 setInterval(() => {
-  if (pitTimers.size > 0 && latestStandings.length) render(latestStandings);
+  if (!latestStandings.length) return;
+  if (pitTimers.size > 0 || sectorState.size > 0) render(latestStandings);
 }, 200);
 
 if (DEMO) {

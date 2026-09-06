@@ -150,7 +150,7 @@ const CLASS_COLORS = {
   "F-V10_Gen1": "#005ce7",
   "F-V10_Gen2": "#dc2625",
   "F-V10_Gen3": "#ddbc17",
-  "F-V8_Gen1": "#1e6fbd",
+  "F-V8 Gen1": "#1e6fbd",
   "F-V8_Gen2": "#fec90a",
   "F-Reiza": "#da0014",
   "F-Vee": "#ec1c26",
