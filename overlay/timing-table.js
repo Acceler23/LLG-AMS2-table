@@ -139,15 +139,24 @@ function updateSessionHeader(session) {
   const label = latestSessionLabel || SESSION_LABELS[session.state] || session.label || "CORRIDA";
   document.getElementById("sessionLabel").textContent = label;
 
-  const totalSeconds = session.timeRemainingSec;
-  if (typeof totalSeconds === "number" && totalSeconds > 0) {
-    const h = Math.floor(totalSeconds / 3600);
-    const m = Math.floor((totalSeconds % 3600) / 60);
-    const s = totalSeconds % 60;
-    const text = h > 0
-      ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
-      : `${m}:${String(s).padStart(2, "0")}`;
-    document.getElementById("sessionTimer").textContent = text;
+  const timerEl = document.getElementById("sessionTimer");
+  if (isRaceSession() && latestLapsInEvent > 0) {
+    let leadLap = 0;
+    latestStandings.forEach((e) => {
+      const lap = e.currentLap || 0;
+      if (lap > leadLap) leadLap = lap;
+    });
+    timerEl.textContent = `Volta ${leadLap}/${latestLapsInEvent}`;
+  } else {
+    const totalSeconds = session.timeRemainingSec;
+    if (typeof totalSeconds === "number" && totalSeconds > 0) {
+      const h = Math.floor(totalSeconds / 3600);
+      const m = Math.floor((totalSeconds % 3600) / 60);
+      const s = totalSeconds % 60;
+      timerEl.textContent = h > 0
+        ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+        : `${m}:${String(s).padStart(2, "0")}`;
+    }
   }
 
   const table = document.getElementById("timing-table");
@@ -269,6 +278,7 @@ const garageSince = new Map();
 const pitTimers = new Map();
 const pitStats = new Map();
 const sectorState = new Map();
+const lastDisplayPos = new Map();
 
 function updateSectorDisplay(entry, classBestSectors) {
   const name = entry.name;
@@ -429,14 +439,14 @@ function formatGap(entry, aheadDistance, change, bestFastestMs, aheadFastestMs) 
   }
   if (typeof aheadDistance !== "number" || typeof entry.totalDistance !== "number") {
     if (aheadDistance === null || aheadDistance === undefined) {
-      return { text: entry.currentLap != null ? formatLapLabel(entry.currentLap) : "-", cls: "" };
+      return { text: "Líder", cls: "" };
     }
     return { text: "-", cls: "" };
   }
   if (!entry.speedMs || entry.speedMs < 2) return { text: "-", cls: "" };
 
   const distanceBehind = aheadDistance - entry.totalDistance;
-  if (distanceBehind <= 0.5) return { text: formatLapLabel(entry.currentLap ?? 0), cls: "" };
+  if (distanceBehind <= 0.5) return { text: "Líder", cls: "" };
 
   const gapSeconds = distanceBehind / entry.speedMs;
   return { text: `+${gapSeconds.toFixed(1)}`, cls: "" };
@@ -633,7 +643,7 @@ function render(standings) {
     }
 
     const entry = item.entry;
-    const prevPos = el.dataset.pos ? parseInt(el.dataset.pos, 10) : null;
+    const prevPos = lastDisplayPos.has(entry.name) ? lastDisplayPos.get(entry.name) : null;
     const posChanged = prevPos !== null && prevPos !== item.displayPosition;
 
     const isDriving = entry.isPlayer && (
@@ -659,18 +669,26 @@ function render(standings) {
     el.classList.toggle("fastest", isPurple);
     const clr = classColor(entry.carClass);
     el.style.borderTopColor = clr;
-    el.style.backgroundColor = el.classList.contains("player") ? "#006bdd" : "#0e42a5";
+    if (!el.classList.contains("flash-up") && !el.classList.contains("flash-down")) {
+      el.style.backgroundColor = el.classList.contains("player") ? "#006bdd" : "#0e42a5";
+    }
     const posEl = el.querySelector(".pos");
     posEl.style.background = clr;
     posEl.style.color = "#fff";
 
-    el.classList.remove("flash-up", "flash-down");
     if (posChanged) {
       const gained = item.displayPosition < prevPos;
+      el.classList.remove("flash-up", "flash-down");
       void el.offsetWidth;
       el.classList.add(gained ? "flash-up" : "flash-down");
+      const flashCls = gained ? "flash-up" : "flash-down";
+      setTimeout(() => {
+        el.classList.remove(flashCls);
+        el.style.backgroundColor = el.classList.contains("player") ? "#006bdd" : "#0e42a5";
+      }, 600);
     }
 
+    lastDisplayPos.set(entry.name, item.displayPosition);
     el.dataset.name = entry.name;
     el.dataset.pos = String(item.displayPosition);
 

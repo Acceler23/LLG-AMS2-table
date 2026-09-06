@@ -244,10 +244,10 @@ html, body {
 }
 
 .row.flash-up {
-  animation: flashUp 0.6s ease;
+  animation: flashUp 0.5s ease;
 }
 .row.flash-down {
-  animation: flashDown 0.6s ease;
+  animation: flashDown 0.5s ease;
 }
 @keyframes flashUp {
   from { background-color: rgba(61, 255, 122, 0.55); }
