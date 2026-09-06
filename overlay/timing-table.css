@@ -117,6 +117,10 @@ html, body {
   font-weight: 700;
 }
 
+.row.yellow-flag {
+  background-color: #c9a000 !important;
+}
+
 .row.dnf {
   opacity: 0.55;
 }
@@ -183,6 +187,10 @@ html, body {
 
 .sectors i.sec-purple {
   background: #d24bff;
+}
+
+.sectors i.sec-red {
+  background: #ff3b3b;
 }
 
 .pit-badge {

@@ -38,6 +38,9 @@ $OFFSET_CUR_SECTOR3              = 7920
 $OFFSET_FAST_SECTOR1             = 8176  # float[64]
 $OFFSET_FAST_SECTOR2             = 8432
 $OFFSET_FAST_SECTOR3             = 8688
+$OFFSET_FLAG_COLOURS             = 19804 # uint[64]
+$OFFSET_FLAG_REASONS             = 20060 # uint[64]
+$OFFSET_LAPS_INVALIDATED         = 9456  # bool[64]
 
 $SESSION_LABELS = @{ 0="INVALIDA"; 1="TREINO LIVRE"; 2="TESTE"; 3="CLASSIFICACAO"; 4="VOLTA DE FORMACAO"; 5="CORRIDA"; 6="TIME ATTACK" }
 
@@ -107,6 +110,9 @@ while ($true) {
                     $fs1 = $accessor.ReadSingle($OFFSET_FAST_SECTOR1 + ($i * 4))
                     $fs2 = $accessor.ReadSingle($OFFSET_FAST_SECTOR2 + ($i * 4))
                     $fs3 = $accessor.ReadSingle($OFFSET_FAST_SECTOR3 + ($i * 4))
+                    $flagColour = $accessor.ReadUInt32($OFFSET_FLAG_COLOURS + ($i * 4))
+                    $flagReason = $accessor.ReadUInt32($OFFSET_FLAG_REASONS + ($i * 4))
+                    $lapInvalid = $accessor.ReadByte($OFFSET_LAPS_INVALIDATED + $i) -ne 0
 
                     if ($inRace -and $raceState -eq 0) { continue }
                     if ($inRace -and [int]$lapsCompleted -eq 0 -and ($pitMode -eq 4 -or $pitMode -eq 2)) { continue }
@@ -140,6 +146,12 @@ while ($true) {
                         bestSector1Ms = if ($fs1 -gt 0) { [int]($fs1 * 1000) } else { $null }
                         bestSector2Ms = if ($fs2 -gt 0) { [int]($fs2 * 1000) } else { $null }
                         bestSector3Ms = if ($fs3 -gt 0) { [int]($fs3 * 1000) } else { $null }
+                        flagColour    = [int]$flagColour
+                        flagReason    = [int]$flagReason
+                        # Flag 6=YELLOW 7=DOUBLE_YELLOW. SM marca todos no mini-setor;
+                        # so carros lentos/parados (<40 km/h) como proxy do causador.
+                        causedYellow  = (($flagColour -eq 6 -or $flagColour -eq 7) -and $speedKmh -lt 40)
+                        lapInvalidated = [bool]$lapInvalid
                     }
                     if ($i -eq $viewedIndex) {
                         if ($splitAhead -ge 0) {

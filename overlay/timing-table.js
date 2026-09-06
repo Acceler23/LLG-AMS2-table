@@ -62,6 +62,13 @@ function ensureBaselines(standings, sessionLabel) {
   if (sessionLabel && sessionLabel !== lastSessionLabel) {
     lastSessionLabel = sessionLabel;
     resetBaselines();
+    if (isRaceSession()) {
+      raceStartAt = Date.now();
+      pitStats.clear();
+      pitTimers.clear();
+    } else {
+      raceStartAt = null;
+    }
   }
 
   const onGrid = standings.length > 0 && standings.every((e) => !e.lapsCompleted || e.lapsCompleted === 0);
@@ -122,10 +129,18 @@ function connect() {
 
       latestStandings = standings;
       if (session) {
+        const prevState = latestSessionState;
         latestSessionState = typeof session.state === "number" ? session.state : (session.state != null ? Number(session.state) : null);
         if (Number.isNaN(latestSessionState)) latestSessionState = null;
         latestSessionLabel = (latestSessionState != null && SESSION_LABELS[latestSessionState]) || session.label || null;
         latestLapsInEvent = Number(session.lapsInEvent) || 0;
+        if (latestSessionState === 5 && prevState !== 5) {
+          raceStartAt = Date.now();
+          pitStats.clear();
+          pitTimers.clear();
+        } else if (latestSessionState !== 5 && prevState === 5) {
+          raceStartAt = null;
+        }
       }
       updateSessionHeader(session);
       render(latestStandings);
@@ -134,29 +149,49 @@ function connect() {
   socket.addEventListener("close", () => setTimeout(connect, 2000));
 }
 
+function getLeader() {
+  let leader = null;
+  latestStandings.forEach((e) => {
+    if (!leader || e.position < leader.position) leader = e;
+  });
+  return leader;
+}
+
+function formatClock(totalSeconds) {
+  const sec = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
+}
+
 function updateSessionHeader(session) {
   if (!session) return;
   const label = latestSessionLabel || SESSION_LABELS[session.state] || session.label || "CORRIDA";
   document.getElementById("sessionLabel").textContent = label;
 
   const timerEl = document.getElementById("sessionTimer");
-  if (isRaceSession() && latestLapsInEvent > 0) {
-    let leadLap = 0;
-    latestStandings.forEach((e) => {
-      const lap = e.currentLap || 0;
-      if (lap > leadLap) leadLap = lap;
-    });
-    timerEl.textContent = `Volta ${leadLap}/${latestLapsInEvent}`;
-  } else {
-    const totalSeconds = session.timeRemainingSec;
-    if (typeof totalSeconds === "number" && totalSeconds > 0) {
-      const h = Math.floor(totalSeconds / 3600);
-      const m = Math.floor((totalSeconds % 3600) / 60);
-      const s = totalSeconds % 60;
-      timerEl.textContent = h > 0
-        ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
-        : `${m}:${String(s).padStart(2, "0")}`;
+  const leader = getLeader();
+
+  if (isRaceSession()) {
+    if (leader && leader.raceState === 3) {
+      timerEl.textContent = "FIM";
+    } else if (latestLapsInEvent > 0) {
+      const leadLap = leader ? (leader.currentLap || 0) : 0;
+      if (leadLap >= latestLapsInEvent) {
+        timerEl.textContent = "ÚLTIMA VOLTA";
+      } else {
+        timerEl.textContent = `Volta ${leadLap}/${latestLapsInEvent}`;
+      }
+    } else {
+      const totalSeconds = typeof session.timeRemainingSec === "number" ? session.timeRemainingSec : 0;
+      timerEl.textContent = formatClock(totalSeconds);
     }
+  } else {
+    const totalSeconds = typeof session.timeRemainingSec === "number" ? session.timeRemainingSec : 0;
+    timerEl.textContent = formatClock(totalSeconds);
   }
 
   const table = document.getElementById("timing-table");
@@ -279,8 +314,23 @@ const pitTimers = new Map();
 const pitStats = new Map();
 const sectorState = new Map();
 const lastDisplayPos = new Map();
+let raceStartAt = null;
 
-function updateSectorDisplay(entry, classBestSectors) {
+function isPitTrackingActive() {
+  if (!isRaceSession()) return true;
+  if (raceStartAt == null) return false;
+  return Date.now() - raceStartAt >= 10000;
+}
+
+function isOutLap(entry) {
+  if (!isPitTrackingActive()) return false;
+  const stats = pitStats.get(entry.name);
+  if (!stats) return false;
+  if (entry.pitMode === 1 || entry.pitMode === 2 || entry.pitMode === 3) return true;
+  return stats.stintLaps === 0 && stats.stops > 0 && !stats.wasInPit;
+}
+
+function updateSectorDisplay(entry, purpleOwners) {
   const name = entry.name;
   let st = sectorState.get(name);
   if (!st) {
@@ -298,17 +348,17 @@ function updateSectorDisplay(entry, classBestSectors) {
     st.clearAt = 0;
   }
 
-  if (!isTimedSession() && isRaceSession()) {
+  if (entry.lapInvalidated) {
+    st.colors = ["red", "red", "red"];
     return st.colors;
   }
 
   const cur = [entry.sector1Ms, entry.sector2Ms, entry.sector3Ms];
   const best = [entry.bestSector1Ms, entry.bestSector2Ms, entry.bestSector3Ms];
-  const overall = classBestSectors || [null, null, null];
 
   for (let i = 0; i < 3; i++) {
     if (cur[i] > 0) {
-      if (overall[i] > 0 && cur[i] <= overall[i]) {
+      if (purpleOwners[i] === name) {
         st.colors[i] = "purple";
       } else if (best[i] > 0 && cur[i] <= best[i]) {
         st.colors[i] = "green";
@@ -320,12 +370,36 @@ function updateSectorDisplay(entry, classBestSectors) {
   return st.colors;
 }
 
+function computePurpleOwners(standings, isClassMode) {
+  const owners = [null, null, null];
+  const best = [Infinity, Infinity, Infinity];
+  standings.forEach((e) => {
+    if (e.lapInvalidated) return;
+    if (e.pitMode === 1 || e.pitMode === 2 || e.pitMode === 3) return;
+    if (isOutLap(e)) return;
+    const cur = [e.sector1Ms, e.sector2Ms, e.sector3Ms];
+    for (let i = 0; i < 3; i++) {
+      if (cur[i] > 0 && cur[i] < best[i]) {
+        best[i] = cur[i];
+        owners[i] = e.name;
+      }
+    }
+  });
+  return owners;
+}
+
 function updatePitStats(entry) {
   const name = entry.name;
   let st = pitStats.get(name);
   if (!st) {
     st = { stops: 0, wasInPit: false, stintStartLap: entry.lapsCompleted || 0 };
     pitStats.set(name, st);
+  }
+  if (!isPitTrackingActive()) {
+    st.wasInPit = entry.pitMode === 1 || entry.pitMode === 2;
+    st.stintStartLap = entry.lapsCompleted || 0;
+    st.stintLaps = 0;
+    return st;
   }
   const inPit = entry.pitMode === 1 || entry.pitMode === 2;
   if (inPit && !st.wasInPit) {
@@ -348,6 +422,10 @@ function isExitingPit(entry) {
 }
 
 function updatePitTimer(entry) {
+  if (!isPitTrackingActive()) {
+    pitTimers.delete(entry.name);
+    return null;
+  }
   const name = entry.name;
   const now = Date.now();
   let st = pitTimers.get(name);
@@ -569,6 +647,8 @@ function render(standings) {
     container.removeChild(container.lastChild);
   }
 
+  const purpleOwners = computePurpleOwners(standings, isClassMode);
+
   let prevDistance = null;
   let prevFastestMs = null;
   let groupLeaderDistance = null;
@@ -669,8 +749,13 @@ function render(standings) {
     el.classList.toggle("fastest", isPurple);
     const clr = classColor(entry.carClass);
     el.style.borderTopColor = clr;
+    el.classList.toggle("yellow-flag", !!entry.causedYellow);
     if (!el.classList.contains("flash-up") && !el.classList.contains("flash-down")) {
-      el.style.backgroundColor = el.classList.contains("player") ? "#006bdd" : "#0e42a5";
+      if (entry.causedYellow) {
+        el.style.backgroundColor = "#c9a000";
+      } else {
+        el.style.backgroundColor = el.classList.contains("player") ? "#006bdd" : "#0e42a5";
+      }
     }
     const posEl = el.querySelector(".pos");
     posEl.style.background = clr;
@@ -684,8 +769,12 @@ function render(standings) {
       const flashCls = gained ? "flash-up" : "flash-down";
       setTimeout(() => {
         el.classList.remove(flashCls);
-        el.style.backgroundColor = el.classList.contains("player") ? "#006bdd" : "#0e42a5";
-      }, 600);
+        if (entry.causedYellow) {
+          el.style.backgroundColor = "#c9a000";
+        } else {
+          el.style.backgroundColor = el.classList.contains("player") ? "#006bdd" : "#0e42a5";
+        }
+      }, 500);
     }
 
     lastDisplayPos.set(entry.name, item.displayPosition);
@@ -730,13 +819,14 @@ function render(standings) {
 
     const secWrap = el.querySelector(".sectors");
     if (secWrap) {
-      const showSec = isTimedSession() || !isRaceSession();
+      const showSec = (isTimedSession() || !isRaceSession())
+        && !isOutLap(entry)
+        && entry.pitMode !== 1
+        && entry.pitMode !== 2
+        && entry.pitMode !== 3;
       secWrap.style.display = showSec ? "" : "none";
       if (showSec) {
-        const classBest = isClassMode
-          ? (bestSectorsByClass[entry.carClass || "—"] || bestSectorsOverall)
-          : bestSectorsOverall;
-        const colors = updateSectorDisplay(entry, classBest);
+        const colors = updateSectorDisplay(entry, purpleOwners);
         const boxes = secWrap.querySelectorAll("i");
         boxes.forEach((box, idx) => {
           box.className = colors[idx] ? `sec-${colors[idx]}` : "";
