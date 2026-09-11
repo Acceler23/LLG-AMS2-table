@@ -221,9 +221,28 @@ function connect() {
       }
       updateSessionHeader(session);
       render(latestStandings);
+    } else if (msg.type === "overlayCommand") {
+      applyOverlayCommand(msg.name);
     }
   });
   socket.addEventListener("close", () => setTimeout(connect, 2000));
+}
+
+function applyOverlayCommand(name) {
+  if (name === "overlay.prevColumn") {
+    rightColumnIndex = (rightColumnIndex - 1 + RIGHT_COLUMN_MODES.length) % RIGHT_COLUMN_MODES.length;
+  } else if (name === "overlay.nextColumn") {
+    rightColumnIndex = (rightColumnIndex + 1) % RIGHT_COLUMN_MODES.length;
+  } else if (name === "overlay.prevPage") {
+    pageIndex = (pageIndex - 1 + PAGE_MODES.length) % PAGE_MODES.length;
+  } else if (name === "overlay.nextPage") {
+    pageIndex = (pageIndex + 1) % PAGE_MODES.length;
+  } else if (name === "overlay.toggleHighlight") {
+    playerHighlightEnabled = !playerHighlightEnabled;
+  } else {
+    return;
+  }
+  render(latestStandings);
 }
 
 function getLeader() {
@@ -1016,22 +1035,13 @@ function formatTime(ms) {
 }
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === ",") {
-    rightColumnIndex = (rightColumnIndex - 1 + RIGHT_COLUMN_MODES.length) % RIGHT_COLUMN_MODES.length;
-    render(latestStandings);
-  } else if (e.key === ".") {
-    rightColumnIndex = (rightColumnIndex + 1) % RIGHT_COLUMN_MODES.length;
-    render(latestStandings);
-  } else if (e.key === "[") {
-    pageIndex = (pageIndex - 1 + PAGE_MODES.length) % PAGE_MODES.length;
-    render(latestStandings);
-  } else if (e.key === "]") {
-    pageIndex = (pageIndex + 1) % PAGE_MODES.length;
-    render(latestStandings);
-  } else if (e.key === "p" || e.key === "P") {
-    playerHighlightEnabled = !playerHighlightEnabled;
-    render(latestStandings);
-  }
+  const c = e.code;
+  const k = e.key;
+  if (c === "Comma" || k === ",") applyOverlayCommand("overlay.prevColumn");
+  else if (c === "Period" || k === ".") applyOverlayCommand("overlay.nextColumn");
+  else if (c === "BracketLeft" || k === "[" || k === "{") applyOverlayCommand("overlay.prevPage");
+  else if (c === "BracketRight" || k === "]" || k === "}") applyOverlayCommand("overlay.nextPage");
+  else if (c === "KeyP" || k === "p" || k === "P") applyOverlayCommand("overlay.toggleHighlight");
 });
 
 setInterval(() => {
