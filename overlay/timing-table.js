@@ -666,10 +666,11 @@ function buildDisplayList(standings) {
     classKeys.forEach((cls) => {
       const size = groups[cls].length;
       const slots = perClass[cls] || 1;
-      const extra = Math.max(0, slots - 1);
-      const others = Math.max(0, size - 1);
-      if (extra > 0 && others > extra) {
-        maxPages = Math.max(maxPages, Math.ceil(others / extra));
+      const fixedCount = Math.max(1, Math.ceil(slots / 2));
+      const extra = Math.max(0, slots - fixedCount);
+      const rest = Math.max(0, size - fixedCount);
+      if (extra > 0 && rest > extra) {
+        maxPages = Math.max(maxPages, Math.ceil(rest / extra));
       }
     });
 
@@ -680,14 +681,19 @@ function buildDisplayList(standings) {
         .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 }));
       if (sorted.length === 0) return;
       const maxSlots = perClass[cls] || 1;
-      list.push(sorted[0]);
-      const others = sorted.slice(1);
-      const extraSlots = Math.max(0, maxSlots - 1);
-      if (others.length <= extraSlots) {
-        others.forEach((item) => list.push(item));
-        for (let s = others.length; s < extraSlots; s++) list.push({ type: "spacer" });
-      } else if (extraSlots > 0) {
-        const page = pickRotated(others, rotateTick, extraSlots, maxPages);
+      const fixedCount = Math.max(1, Math.ceil(maxSlots / 2));
+      const extraSlots = Math.max(0, maxSlots - fixedCount);
+
+      if (sorted.length <= maxSlots) {
+        sorted.forEach((item) => list.push(item));
+        for (let s = sorted.length; s < maxSlots; s++) list.push({ type: "spacer" });
+        return;
+      }
+
+      sorted.slice(0, fixedCount).forEach((item) => list.push(item));
+      const rest = sorted.slice(fixedCount);
+      if (extraSlots > 0) {
+        const page = pickRotated(rest, rotateTick, extraSlots, maxPages);
         page.forEach((item) => list.push({ ...item, rotating: true }));
         for (let s = page.length; s < extraSlots; s++) list.push({ type: "spacer" });
       }
