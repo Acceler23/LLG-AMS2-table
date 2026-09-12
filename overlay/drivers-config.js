@@ -222,7 +222,7 @@ const CLASS_COLORS = {
   "TC60S2": "#a2a2a1",
 };
 
-const DEFAULT_COLOR = "rgb(255, 0, 221)";
+const DEFAULT_COLOR = "rgb(0, 98, 255)";
 
 const CAR_LOGOS = {
   //Acura

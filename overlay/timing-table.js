@@ -126,6 +126,10 @@ function connect() {
       const raw = Array.isArray(payload) ? payload : payload.standings || [];
       const session = Array.isArray(payload) ? null : payload.session;
       const standings = raw.filter((e) => !isSafetyCar(e) && !isObserver(e));
+      updateStablePlayer(standings);
+      standings.forEach((e) => {
+        e.isPlayer = isStablePlayer(e);
+      });
 
       latestStandings = standings;
       if (session) {
@@ -226,6 +230,19 @@ function classColor(carClass) {
   return DEFAULT_COLOR;
 }
 
+function contrastText(bg) {
+  if (!bg) return "#fff";
+  let hex = String(bg).replace("#", "").trim();
+  if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
+  if (hex.length !== 6) return "#fff";
+  const r = parseInt(hex.slice(0, 2), 16) / 255;
+  const g = parseInt(hex.slice(2, 4), 16) / 255;
+  const b = parseInt(hex.slice(4, 6), 16) / 255;
+  const lin = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  return L > 0.45 ? "#000" : "#fff";
+}
+
 function sortByTiming(a, b) {
   if (!isRaceSession()) {
     const fa = a.fastestLapMs > 0 ? a.fastestLapMs : Infinity;
@@ -240,6 +257,63 @@ function sortByTiming(a, b) {
 // pilotando ou so' espectando). Por isso o destaque de "voce" e' opcional:
 // aperte "p" pra ligar/desligar quando estiver so' assistindo.
 let playerHighlightEnabled = true;
+
+let stablePlayerName = null;
+let stablePlayerClass = null;
+let pendingPlayerName = null;
+let pendingPlayerSince = 0;
+const PLAYER_STABLE_MS = 800;
+
+function updateStablePlayer(standings) {
+  const viewed = standings.find((e) => e.isPlayer);
+  const name = viewed ? viewed.name : null;
+  const cls = viewed ? viewed.carClass : null;
+  const now = Date.now();
+
+  // primeira detecção: assume imediatamente
+  if (!stablePlayerName && name) {
+    stablePlayerName = name;
+    stablePlayerClass = cls;
+    pendingPlayerName = null;
+    return;
+  }
+
+  if (name && name === stablePlayerName) {
+    pendingPlayerName = null;
+    if (cls) stablePlayerClass = cls;
+    return;
+  }
+
+  if (!name) {
+    // perda momentanea do viewedIndex — mantem o ultimo estavel
+    pendingPlayerName = null;
+    return;
+  }
+
+  // mudanca de piloto: so aplica apos 800ms estavel
+  if (name === pendingPlayerName) {
+    if (now - pendingPlayerSince >= PLAYER_STABLE_MS) {
+      stablePlayerName = name;
+      stablePlayerClass = cls || stablePlayerClass;
+      pendingPlayerName = null;
+    }
+    return;
+  }
+
+  pendingPlayerName = name;
+  pendingPlayerSince = now;
+}
+
+function isStablePlayer(entry) {
+  if (stablePlayerName) return entry.name === stablePlayerName;
+  return !!entry.isPlayer;
+}
+
+function getStablePlayerClass(standings) {
+  if (stablePlayerClass) return stablePlayerClass;
+  const viewed = standings.find((e) => e.isPlayer);
+  return viewed ? viewed.carClass : null;
+}
 
 function manufacturerName(carName) {
   // pega so' a primeira palavra do nome do carro como nome da montadora.
@@ -576,6 +650,7 @@ function buildDisplayList(standings) {
   }
 
   if (mode === "Minha classe") {
+<<<<<<< Updated upstream
     const viewed = standings.find((e) => e.isPlayer);
     const myClass = viewed ? viewed.carClass : null;
     return withAhead(standings
@@ -583,6 +658,25 @@ function buildDisplayList(standings) {
       .slice()
       .sort(sortByTiming)
       .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 })));
+=======
+    const myClass = getStablePlayerClass(standings);
+    if (!myClass) return [];
+    const ordered = standings
+      .filter((e) => e.carClass === myClass)
+      .slice()
+      .sort(sortByTiming)
+      .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 }));
+    const maxSlots = maxDriverSlots();
+    if (ordered.length <= maxSlots) return withAhead(ordered);
+    const fixedCount = Math.min(10, ordered.length);
+    const fixed = ordered.slice(0, fixedCount);
+    const rest = ordered.slice(fixedCount);
+    const extraSlots = Math.max(0, maxSlots - fixedCount);
+    if (extraSlots <= 0 || rest.length === 0) return withAhead(fixed);
+    const rotated = pickRotated(rest, rotateTick, extraSlots).map((item) => ({ ...item, rotating: true }));
+    while (rotated.length < extraSlots) rotated.push({ type: "spacer" });
+    return withAhead(fixed.concat(rotated));
+>>>>>>> Stashed changes
   }
 
   return [];
@@ -591,8 +685,8 @@ function buildDisplayList(standings) {
 function currentPageLabel(standings) {
   const mode = PAGE_MODES[pageIndex];
   if (mode === "Minha classe") {
-    const viewed = standings.find((e) => e.isPlayer);
-    return (viewed && formatClassName(viewed.carClass)) || "Minha classe";
+    const cls = getStablePlayerClass(standings);
+    return (cls && formatClassName(cls)) || "Minha classe";
   }
   return mode;
 }
@@ -683,7 +777,7 @@ function render(standings) {
       const hClr = classColor(item.label);
       el.style.borderLeftColor = hClr;
       el.style.background = hClr;
-      el.style.color = "#fff";
+      el.style.color = contrastText(hClr);
       prevDistance = null;
       prevFastestMs = null;
       groupLeaderDistance = null;
@@ -726,7 +820,7 @@ function render(standings) {
     const prevPos = lastDisplayPos.has(entry.name) ? lastDisplayPos.get(entry.name) : null;
     const posChanged = prevPos !== null && prevPos !== item.displayPosition;
 
-    const isDriving = entry.isPlayer && (
+    const isDriving = isStablePlayer(entry) && (
       !entry.inRace ||
       entry.lapsCompleted > 0 ||
       entry.pitMode === 0 ||
@@ -759,7 +853,7 @@ function render(standings) {
     }
     const posEl = el.querySelector(".pos");
     posEl.style.background = clr;
-    posEl.style.color = "#fff";
+    posEl.style.color = contrastText(clr);
 
     if (posChanged) {
       const gained = item.displayPosition < prevPos;
