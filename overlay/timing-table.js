@@ -6,8 +6,27 @@ const WS_URL = `ws://${location.hostname}:${location.port || 8080}/ws`;
 const RIGHT_COLUMN_MODES = ["Intervalo", "Gap líder", "Última volta", "Melhor volta", "Posições", "Paradas", "Stint", "VMax"];
 let rightColumnIndex = 0;
 
-const PAGE_MODES = ["Geral", "Multiclasse", "Minha classe"];
-let pageIndex = 1;
+const PAGE_MODES_ALL = ["Geral", "Multiclasse", "Minha classe"];
+let pageIndex = 0;
+
+function countClasses(standings) {
+  const set = new Set();
+  (standings || []).forEach((e) => {
+    if (e.carClass) set.add(e.carClass);
+  });
+  return set.size;
+}
+
+function activePageModes(standings) {
+  if (countClasses(standings) <= 1) return ["Geral"];
+  return PAGE_MODES_ALL;
+}
+
+function currentPageMode(standings) {
+  const modes = activePageModes(standings);
+  if (pageIndex >= modes.length) pageIndex = 0;
+  return modes[pageIndex];
+}
 const MAX_TABLE_H = 1080;
 const TITLE_H = 48;
 const COL_HEADER_H = 36;
@@ -238,9 +257,13 @@ function applyOverlayCommand(name) {
   } else if (name === "overlay.nextColumn") {
     rightColumnIndex = (rightColumnIndex + 1) % RIGHT_COLUMN_MODES.length;
   } else if (name === "overlay.prevPage") {
-    pageIndex = (pageIndex - 1 + PAGE_MODES.length) % PAGE_MODES.length;
+    const modes = activePageModes(latestStandings);
+    if (modes.length <= 1) return;
+    pageIndex = (pageIndex - 1 + modes.length) % modes.length;
   } else if (name === "overlay.nextPage") {
-    pageIndex = (pageIndex + 1) % PAGE_MODES.length;
+    const modes = activePageModes(latestStandings);
+    if (modes.length <= 1) return;
+    pageIndex = (pageIndex + 1) % modes.length;
   } else if (name === "overlay.toggleHighlight") {
     playerHighlightEnabled = !playerHighlightEnabled;
   } else {
@@ -711,7 +734,7 @@ function pickRotated(arr, page, count, maxPages) {
 }
 
 function buildDisplayList(standings) {
-  const mode = PAGE_MODES[pageIndex];
+  const mode = currentPageMode(standings);
 
   function withAhead(rows) {
     let prevFast = null;
@@ -795,16 +818,6 @@ function buildDisplayList(standings) {
   }
 
   if (mode === "Minha classe") {
-<<<<<<< Updated upstream
-    const viewed = standings.find((e) => e.isPlayer);
-    const myClass = viewed ? viewed.carClass : null;
-    const ordered = standings
-      .filter((e) => e.carClass === myClass)
-      .slice()
-      .sort(sortByTiming)
-<<<<<<< HEAD
-      .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 })));
-=======
     const myClass = getStablePlayerClass(standings);
     if (!myClass) return [];
     const ordered = standings
@@ -822,22 +835,13 @@ function buildDisplayList(standings) {
     const rotated = pickRotated(rest, rotateTick, extraSlots).map((item) => ({ ...item, rotating: true }));
     while (rotated.length < extraSlots) rotated.push({ type: "spacer" });
     return withAhead(fixed.concat(rotated));
->>>>>>> Stashed changes
-=======
-      .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 }));
-    const maxSlots = maxDriverSlots();
-    if (ordered.length <= maxSlots) return withAhead(ordered);
-    const page = pickRotated(ordered, rotateTick, maxSlots).map((item) => ({ ...item, rotating: true }));
-    while (page.length < maxSlots) page.push({ type: "spacer" });
-    return withAhead(page);
->>>>>>> 8cd3063da0c7f418b7096084e5c27629dac8ca55
   }
 
   return [];
 }
 
 function currentPageLabel(standings) {
-  const mode = PAGE_MODES[pageIndex];
+  const mode = currentPageMode(standings);
   if (mode === "Minha classe") {
     const cls = getStablePlayerClass(standings);
     return (cls && formatClassName(cls)) || "Minha classe";
@@ -851,7 +855,7 @@ function render(standings) {
 
   ensureBaselines(standings, latestSessionLabel);
 
-  const isClassMode = PAGE_MODES[pageIndex] !== "Geral";
+  const isClassMode = currentPageMode(standings) !== "Geral";
   const showLapHighlight = RIGHT_COLUMN_MODES[rightColumnIndex] === "Última volta" || RIGHT_COLUMN_MODES[rightColumnIndex] === "Melhor volta";
 
   const displayList = buildDisplayList(standings);

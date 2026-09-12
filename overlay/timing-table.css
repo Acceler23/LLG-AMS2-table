@@ -182,17 +182,25 @@ html, body {
 
 .sectors {
   display: flex;
+  align-items: center;
   gap: 3px;
   flex-shrink: 0;
   margin-left: auto;
+  font-style: normal;
 }
 
 .sectors i {
   display: block;
   width: 10px;
-  height: 10px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border: none;
   border-radius: 2px;
+  flex: 0 0 10px;
+  box-sizing: border-box;
   background: rgba(255, 255, 255, 0.15);
+  font-style: normal;
 }
 
 .sectors i.sec-yellow {
