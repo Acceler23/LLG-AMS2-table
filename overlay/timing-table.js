@@ -8,6 +8,83 @@ let rightColumnIndex = 0;
 
 const PAGE_MODES = ["Geral", "Multiclasse", "Minha classe"];
 let pageIndex = 1;
+const MAX_TABLE_H = 1080;
+const TITLE_H = 48;
+const COL_HEADER_H = 36;
+const ROW_H = 49;
+const CLASS_HDR_H = 32;
+const SAFETY_H = 16;
+let rotateTick = 0;
+const ROTATE_MS = 10000;
+
+function maxDriverSlots() {
+  return Math.max(1, Math.floor((MAX_TABLE_H - TITLE_H - COL_HEADER_H - SAFETY_H) / ROW_H));
+}
+
+function pickPageSynced(arr, page, count, maxPages) {
+  if (!arr.length || count <= 0) return [];
+  if (arr.length <= count) return arr.slice();
+  const pages = Math.ceil(arr.length / count);
+  const p = maxPages > 0 ? (page % maxPages) : 0;
+  if (p >= pages) {
+    // ultima pagina da classe ate o ciclo global reiniciar
+    const start = (pages - 1) * count;
+    return arr.slice(start, start + count);
+  }
+  const start = p * count;
+  return arr.slice(start, start + count);
+}
+
+function slotsPerClass(groups) {
+  const classes = Object.keys(groups);
+  const n = classes.length;
+  if (n === 0) return {};
+
+  const available = MAX_TABLE_H - TITLE_H - COL_HEADER_H - SAFETY_H;
+  const minCost = n * (CLASS_HDR_H + ROW_H);
+  let extra = Math.floor((available - minCost) / ROW_H);
+  if (extra < 0) extra = 0;
+
+  const sizes = classes.map((cls) => groups[cls].length);
+  const othersNeed = sizes.map((s) => Math.max(0, s - 1));
+  const totalOthers = othersNeed.reduce((a, b) => a + b, 0);
+
+  const result = {};
+  if (totalOthers === 0 || extra >= totalOthers) {
+    classes.forEach((cls, i) => { result[cls] = sizes[i]; });
+    return result;
+  }
+
+  // distribui extras proporcionalmente; minimo 1 (lider) por classe
+  let assigned = 0;
+  const extras = classes.map((cls, i) => {
+    if (totalOthers === 0) return 0;
+    const share = Math.floor((othersNeed[i] / totalOthers) * extra);
+    return share;
+  });
+  assigned = extras.reduce((a, b) => a + b, 0);
+  let left = extra - assigned;
+  let idx = 0;
+  while (left > 0 && totalOthers > 0) {
+    if (extras[idx % n] < othersNeed[idx % n]) {
+      extras[idx % n] += 1;
+      left -= 1;
+    }
+    idx += 1;
+    if (idx > n * extra + 10) break;
+  }
+
+  classes.forEach((cls, i) => {
+    // total slots na classe = lider + extras (pelo menos 1)
+    // se sobrar pouco espaço no geral, limita a 3 (lider+2)
+    let slots = 1 + extras[i];
+    if (extra < n * 2) slots = Math.min(slots, 3);
+    slots = Math.min(slots, sizes[i]);
+    slots = Math.max(1, slots);
+    result[cls] = slots;
+  });
+  return result;
+}
 
 let latestStandings = [];
 let latestSessionLabel = null;
@@ -144,9 +221,28 @@ function connect() {
       }
       updateSessionHeader(session);
       render(latestStandings);
+    } else if (msg.type === "overlayCommand") {
+      applyOverlayCommand(msg.name);
     }
   });
   socket.addEventListener("close", () => setTimeout(connect, 2000));
+}
+
+function applyOverlayCommand(name) {
+  if (name === "overlay.prevColumn") {
+    rightColumnIndex = (rightColumnIndex - 1 + RIGHT_COLUMN_MODES.length) % RIGHT_COLUMN_MODES.length;
+  } else if (name === "overlay.nextColumn") {
+    rightColumnIndex = (rightColumnIndex + 1) % RIGHT_COLUMN_MODES.length;
+  } else if (name === "overlay.prevPage") {
+    pageIndex = (pageIndex - 1 + PAGE_MODES.length) % PAGE_MODES.length;
+  } else if (name === "overlay.nextPage") {
+    pageIndex = (pageIndex + 1) % PAGE_MODES.length;
+  } else if (name === "overlay.toggleHighlight") {
+    playerHighlightEnabled = !playerHighlightEnabled;
+  } else {
+    return;
+  }
+  render(latestStandings);
 }
 
 function getLeader() {
@@ -530,6 +626,16 @@ function formatGap(entry, aheadDistance, change, bestFastestMs, aheadFastestMs) 
   return { text: `+${gapSeconds.toFixed(1)}`, cls: "" };
 }
 
+function pickRotated(arr, page, count, maxPages) {
+  if (maxPages != null) return pickPageSynced(arr, page, count, maxPages);
+  if (!arr.length || count <= 0) return [];
+  if (arr.length <= count) return arr.slice();
+  const pages = Math.ceil(arr.length / count);
+  const p = ((page % pages) + pages) % pages;
+  const start = p * count;
+  return arr.slice(start, start + count);
+}
+
 function buildDisplayList(standings) {
   const mode = PAGE_MODES[pageIndex];
 
@@ -537,7 +643,7 @@ function buildDisplayList(standings) {
     let prevFast = null;
     return rows.map((item) => {
       if (item.type !== "row") {
-        prevFast = null;
+        if (item.type !== "spacer") prevFast = null;
         return item;
       }
       item.aheadFastestMs = prevFast;
@@ -548,13 +654,22 @@ function buildDisplayList(standings) {
   }
 
   if (mode === "Geral") {
+    let ordered;
     if (!isRaceSession()) {
-      return withAhead(standings
-        .slice()
-        .sort(sortByTiming)
-        .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 })));
+      ordered = standings.slice().sort(sortByTiming).map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 }));
+    } else {
+      ordered = standings.map((e) => ({ type: "row", entry: e, displayPosition: e.position }));
     }
-    return standings.map((e) => ({ type: "row", entry: e, displayPosition: e.position }));
+    const maxSlots = maxDriverSlots();
+    if (ordered.length <= maxSlots) return withAhead(ordered);
+    const fixedCount = Math.min(10, ordered.length);
+    const fixed = ordered.slice(0, fixedCount);
+    const rest = ordered.slice(fixedCount);
+    const extraSlots = Math.max(0, maxSlots - fixedCount);
+    if (extraSlots <= 0 || rest.length === 0) return withAhead(fixed);
+    const rotated = pickRotated(rest, rotateTick, extraSlots).map((item) => ({ ...item, rotating: true }));
+    while (rotated.length < extraSlots) rotated.push({ type: "spacer" });
+    return withAhead(fixed.concat(rotated));
   }
 
   if (mode === "Multiclasse") {
@@ -564,13 +679,43 @@ function buildDisplayList(standings) {
       (groups[cls] = groups[cls] || []).push(e);
     });
 
+    const perClass = slotsPerClass(groups);
+    const classKeys = Object.keys(groups);
+    let maxPages = 1;
+    classKeys.forEach((cls) => {
+      const size = groups[cls].length;
+      const slots = perClass[cls] || 1;
+      const fixedCount = Math.max(1, Math.ceil(slots / 2));
+      const extra = Math.max(0, slots - fixedCount);
+      const rest = Math.max(0, size - fixedCount);
+      if (extra > 0 && rest > extra) {
+        maxPages = Math.max(maxPages, Math.ceil(rest / extra));
+      }
+    });
+
     const list = [];
-    Object.keys(groups).forEach((cls) => {
+    classKeys.forEach((cls) => {
       list.push({ type: "header", label: cls });
-      groups[cls]
-        .slice()
-        .sort(sortByTiming)
-        .forEach((e, i) => list.push({ type: "row", entry: e, displayPosition: i + 1 }));
+      const sorted = groups[cls].slice().sort(sortByTiming)
+        .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 }));
+      if (sorted.length === 0) return;
+      const maxSlots = perClass[cls] || 1;
+      const fixedCount = Math.max(1, Math.ceil(maxSlots / 2));
+      const extraSlots = Math.max(0, maxSlots - fixedCount);
+
+      if (sorted.length <= maxSlots) {
+        sorted.forEach((item) => list.push(item));
+        for (let s = sorted.length; s < maxSlots; s++) list.push({ type: "spacer" });
+        return;
+      }
+
+      sorted.slice(0, fixedCount).forEach((item) => list.push(item));
+      const rest = sorted.slice(fixedCount);
+      if (extraSlots > 0) {
+        const page = pickRotated(rest, rotateTick, extraSlots, maxPages);
+        page.forEach((item) => list.push({ ...item, rotating: true }));
+        for (let s = page.length; s < extraSlots; s++) list.push({ type: "spacer" });
+      }
     });
     return withAhead(list);
   }
@@ -578,11 +723,16 @@ function buildDisplayList(standings) {
   if (mode === "Minha classe") {
     const viewed = standings.find((e) => e.isPlayer);
     const myClass = viewed ? viewed.carClass : null;
-    return withAhead(standings
+    const ordered = standings
       .filter((e) => e.carClass === myClass)
       .slice()
       .sort(sortByTiming)
-      .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 })));
+      .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 }));
+    const maxSlots = maxDriverSlots();
+    if (ordered.length <= maxSlots) return withAhead(ordered);
+    const page = pickRotated(ordered, rotateTick, maxSlots).map((item) => ({ ...item, rotating: true }));
+    while (page.length < maxSlots) page.push({ type: "spacer" });
+    return withAhead(page);
   }
 
   return [];
@@ -649,6 +799,27 @@ function render(standings) {
 
   const purpleOwners = computePurpleOwners(standings, isClassMode);
 
+  // distancia do carro a frente real (ordem completa, nao so visivel)
+  {
+    const byClass = {};
+    standings.slice().sort((a, b) => a.position - b.position).forEach((e) => {
+      const cls = e.carClass || "—";
+      if (!byClass[cls]) byClass[cls] = [];
+      byClass[cls].push(e);
+    });
+    const overall = standings.slice().sort((a, b) => a.position - b.position);
+    overall.forEach((e, i) => {
+      e._aheadDistance = i > 0 ? overall[i - 1].totalDistance : null;
+    });
+    if (isClassMode) {
+      Object.values(byClass).forEach((list) => {
+        list.forEach((e, i) => {
+          e._aheadDistance = i > 0 ? list[i - 1].totalDistance : null;
+        });
+      });
+    }
+  }
+
   let prevDistance = null;
   let prevFastestMs = null;
   let groupLeaderDistance = null;
@@ -698,6 +869,18 @@ function render(standings) {
           groupLeaderDistance = e.totalDistance;
         }
       });
+      return;
+    }
+
+    if (item.type === "spacer") {
+      if (!el || el.dataset.kind !== "spacer") {
+        const fresh = document.createElement("div");
+        fresh.className = "row row-spacer";
+        fresh.dataset.kind = "spacer";
+        if (el) container.replaceChild(fresh, el);
+        else container.appendChild(fresh);
+        el = fresh;
+      }
       return;
     }
 
@@ -777,6 +960,12 @@ function render(standings) {
       }, 500);
     }
 
+    if (item.rotating && el.dataset.name !== entry.name) {
+      el.classList.remove("slide-in");
+      void el.offsetWidth;
+      el.classList.add("slide-in");
+    }
+
     lastDisplayPos.set(entry.name, item.displayPosition);
     el.dataset.name = entry.name;
     el.dataset.pos = String(item.displayPosition);
@@ -791,7 +980,7 @@ function render(standings) {
     }
 
     const change = positionChange(entry, item.displayPosition, isClassMode);
-    const gapRef = prevDistance;
+    const gapRef = (typeof entry._aheadDistance === "number") ? entry._aheadDistance : prevDistance;
     posEl.textContent = item.displayPosition;
     el.querySelector(".name-text").textContent = entry.name;
     const rowBestFastest = (isClassMode && bestFastestByClass[entry.carClass || "—"] != null)
@@ -846,28 +1035,24 @@ function formatTime(ms) {
 }
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === ",") {
-    rightColumnIndex = (rightColumnIndex - 1 + RIGHT_COLUMN_MODES.length) % RIGHT_COLUMN_MODES.length;
-    render(latestStandings);
-  } else if (e.key === ".") {
-    rightColumnIndex = (rightColumnIndex + 1) % RIGHT_COLUMN_MODES.length;
-    render(latestStandings);
-  } else if (e.key === "[") {
-    pageIndex = (pageIndex - 1 + PAGE_MODES.length) % PAGE_MODES.length;
-    render(latestStandings);
-  } else if (e.key === "]") {
-    pageIndex = (pageIndex + 1) % PAGE_MODES.length;
-    render(latestStandings);
-  } else if (e.key === "p" || e.key === "P") {
-    playerHighlightEnabled = !playerHighlightEnabled;
-    render(latestStandings);
-  }
+  const c = e.code;
+  const k = e.key;
+  if (c === "Comma" || k === ",") applyOverlayCommand("overlay.prevColumn");
+  else if (c === "Period" || k === ".") applyOverlayCommand("overlay.nextColumn");
+  else if (c === "BracketLeft" || k === "[" || k === "{") applyOverlayCommand("overlay.prevPage");
+  else if (c === "BracketRight" || k === "]" || k === "}") applyOverlayCommand("overlay.nextPage");
+  else if (c === "KeyP" || k === "p" || k === "P") applyOverlayCommand("overlay.toggleHighlight");
 });
 
 setInterval(() => {
   if (!latestStandings.length) return;
   if (pitTimers.size > 0 || sectorState.size > 0) render(latestStandings);
 }, 200);
+
+setInterval(() => {
+  rotateTick += 1;
+  if (latestStandings.length) render(latestStandings);
+}, ROTATE_MS);
 
 if (DEMO) {
   latestStandings = [

@@ -15,6 +15,7 @@ const HTTP_PORT = process.env.HTTP_PORT || 8080; // porta da overlay/painel (obs
 const BRIDGE_PORT = process.env.BRIDGE_PORT || 5607; // porta TCP local entre o listener.ps1 e este servidor
 
 const app = express();
+app.use(express.json());
 app.use("/overlay", express.static(path.join(__dirname, "..", "overlay")));
 app.use("/panel", express.static(path.join(__dirname, "..", "control-panel")));
 
@@ -22,6 +23,16 @@ const server = http.createServer(app);
 
 // WebSocket: distribui a tabela de tempos para os clientes e recebe comandos deles
 const wss = createWsServer(server);
+
+app.post("/command", (req, res) => {
+  const name = req.body && req.body.name;
+  if (!name) return res.status(400).json({ ok: false });
+  if (String(name).startsWith("overlay.")) {
+    wss.broadcast({ type: "overlayCommand", name, payload: req.body.payload || {} });
+    return res.json({ ok: true });
+  }
+  res.status(404).json({ ok: false });
+});
 
 // Bridge: o listener.ps1 le a Shared Memory do AMS2 e ja manda o standings
 // pronto em JSON -- aqui e' so' repassar pro WebSocket.

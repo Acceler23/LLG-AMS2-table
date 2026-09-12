@@ -26,10 +26,19 @@ function createWsServer(httpServer) {
       }
 
       // Formato esperado: { type: "command", name: "...", payload: {...} }
-      if (msg.type === "command" && commandHandlers.has(msg.name)) {
-        commandHandlers.get(msg.name)(msg.payload, socket);
-      } else {
-        console.log("Comando sem handler registrado:", msg);
+      if (msg.type === "command") {
+        if (msg.name && String(msg.name).startsWith("overlay.")) {
+          const payload = JSON.stringify({ type: "overlayCommand", name: msg.name, payload: msg.payload || {} });
+          for (const c of clients) {
+            if (c.readyState === c.OPEN) c.send(payload);
+          }
+          return;
+        }
+        if (commandHandlers.has(msg.name)) {
+          commandHandlers.get(msg.name)(msg.payload, socket);
+        } else {
+          console.log("Comando sem handler registrado:", msg);
+        }
       }
     });
 

@@ -8,7 +8,8 @@ html, body {
 
 #timing-table {
   position: absolute;
-  width: 400px;
+  width: 460px;
+  max-height: 1080px;
   background-color: #0e3a66;
   overflow: hidden;
   border-radius: 10px 0 0 10px;
@@ -47,7 +48,7 @@ html, body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  height: 42px;
+  height: 40px;
   box-sizing: border-box;
 }
 
@@ -71,7 +72,7 @@ html, body {
   justify-content: space-between;
   align-items: center;
   padding: 6px 16px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   color: #fff;
   letter-spacing: 0.5px;
@@ -87,8 +88,8 @@ html, body {
   background: rgba(0,0,0,0.35);
   color: #fff;
   font-weight: 700;
-  font-size: 12px;
-  padding: 5px 16px;
+  font-size: 14px;
+  padding: 6px 16px;
   letter-spacing: 0.5px;
   border-left: 4px solid transparent;
   text-align: center;
@@ -99,12 +100,20 @@ html, body {
   text-align: right;
 }
 
+.row-spacer {
+  min-height: 44px;
+  height: 44px;
+  visibility: hidden;
+  pointer-events: none;
+  margin-left: 5px;
+}
+
 .row {
   display: grid;
-  grid-template-columns: 44px 1fr 90px;
+  grid-template-columns: 50px 1fr 100px;
   align-items: stretch;
-  min-height: 32px;
-  font-size: 18px;
+  min-height: 44px;
+  font-size: 20px;
   background-color: #0e42a5;
   border-top: 3px solid #3a5a8c;
   border-radius: 0 0 0 10px;
@@ -146,7 +155,7 @@ html, body {
 
 .pos {
   font-weight: 700;
-  font-size: 15px;
+  font-size: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -160,6 +169,15 @@ html, body {
   gap: 8px;
   overflow: hidden;
   padding-left: 8px;
+  min-width: 0;
+}
+
+.name-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sectors {
@@ -195,12 +213,12 @@ html, body {
 
 .pit-badge {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
-  padding: 2px 6px;
+  padding: 2px 7px;
   border-radius: 4px;
   letter-spacing: 0.5px;
-  margin-left: 4px;
+  margin-left: 6px;
 }
 
 .pit-badge.pit-in {
@@ -224,16 +242,10 @@ html, body {
 }
 
 .name .logo {
-  width: 20px;
-  height: 20px;
+  width: 30px;
+  height: 30px;
   object-fit: contain;
   flex-shrink: 0;
-}
-
-.name-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .right-value {
@@ -256,6 +268,14 @@ html, body {
 }
 .row.flash-down {
   animation: flashDown 0.5s ease;
+}
+
+.row.slide-in {
+  animation: slideInLeft 0.4s ease;
+}
+@keyframes slideInLeft {
+  from { transform: translateX(-40px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
 }
 @keyframes flashUp {
   from { background-color: rgba(61, 255, 122, 0.55); }
