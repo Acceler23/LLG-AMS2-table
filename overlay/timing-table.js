@@ -9,6 +9,13 @@ let rightColumnIndex = 0;
 const PAGE_MODES_ALL = ["Geral", "Multiclasse", "Minha classe"];
 let pageIndex = 0;
 
+const SPLIT_BY_CAR_CLASSES = new Set([
+  "Carrera Cup",
+  "LancerCup",
+  "LES_2025",
+  "TSICup",
+]);
+
 function countClasses(standings) {
   const set = new Set();
   (standings || []).forEach((e) => {
@@ -17,7 +24,29 @@ function countClasses(standings) {
   return set.size;
 }
 
+function countCars(standings) {
+  const set = new Set();
+  (standings || []).forEach((e) => {
+    if (e.carName) set.add(e.carName);
+  });
+  return set.size;
+}
+
+function isSplitByCarSession(standings) {
+  if (countClasses(standings) !== 1) return false;
+  const cls = (standings.find((e) => e.carClass) || {}).carClass;
+  return !!(cls && SPLIT_BY_CAR_CLASSES.has(cls));
+}
+
+function groupKey(entry, standings) {
+  if (isSplitByCarSession(standings)) return entry.carName || "—";
+  return entry.carClass || "—";
+}
+
 function activePageModes(standings) {
+  if (isSplitByCarSession(standings)) {
+    return countCars(standings) > 1 ? PAGE_MODES_ALL : ["Geral"];
+  }
   if (countClasses(standings) <= 1) return ["Geral"];
   return PAGE_MODES_ALL;
 }
@@ -147,11 +176,29 @@ let startOverall = null;
 let startInClass = null;
 let baselineSession = null;
 let lastSessionLabel = null;
+let baselineLocked = false;
 
 function resetBaselines() {
   startOverall = null;
   startInClass = null;
   baselineSession = null;
+  baselineLocked = false;
+}
+
+function buildGroupRanks(standings) {
+  const groups = {};
+  standings.forEach((e) => {
+    const key = groupKey(e, standings);
+    (groups[key] = groups[key] || []).push(e);
+  });
+  const ranks = new Map();
+  Object.values(groups).forEach((list) => {
+    list
+      .slice()
+      .sort((a, b) => a.position - b.position)
+      .forEach((e, i) => ranks.set(e.name, i + 1));
+  });
+  return ranks;
 }
 
 function ensureBaselines(standings, sessionLabel) {
@@ -167,33 +214,35 @@ function ensureBaselines(standings, sessionLabel) {
     }
   }
 
-  const onGrid = standings.length > 0 && standings.every((e) => !e.lapsCompleted || e.lapsCompleted === 0);
-  if (startOverall && onGrid) {
-    resetBaselines();
+  // trava quando o pelotao se mexe (speed > 3 m/s). lapsCompleted fica 0 a 1a volta inteira.
+  const fieldMoving = standings.some((e) => typeof e.speedMs === "number" && e.speedMs > 3);
+
+  if (!baselineLocked) {
+    startOverall = new Map(standings.map((e) => [e.name, e.position]));
+    startInClass = buildGroupRanks(standings);
+    baselineSession = sessionLabel;
+    if (fieldMoving) baselineLocked = true;
   }
-  if (startOverall) return;
-
-  startOverall = new Map(standings.map((e) => [e.name, e.position]));
-  baselineSession = sessionLabel;
-
-  const groups = {};
-  standings.forEach((e) => {
-    const cls = e.carClass || "—";
-    (groups[cls] = groups[cls] || []).push(e);
-  });
-  startInClass = new Map();
-  Object.values(groups).forEach((list) => {
-    list
-      .slice()
-      .sort((a, b) => a.position - b.position)
-      .forEach((e, i) => startInClass.set(e.name, i + 1));
-  });
 }
 
-function positionChange(entry, displayPosition, isClassMode) {
+function currentGroupPosition(entry, standings) {
+  const key = groupKey(entry, standings);
+  const list = standings
+    .filter((e) => groupKey(e, standings) === key)
+    .slice()
+    .sort((a, b) => a.position - b.position);
+  const idx = list.findIndex((e) => e.name === entry.name);
+  return idx >= 0 ? idx + 1 : null;
+}
+
+function positionChange(entry, displayPosition, isClassMode, standings) {
   if (isClassMode) {
     if (!startInClass || !startInClass.has(entry.name)) return null;
-    return startInClass.get(entry.name) - displayPosition;
+    const cur = standings
+      ? currentGroupPosition(entry, standings)
+      : displayPosition;
+    if (cur == null) return null;
+    return startInClass.get(entry.name) - cur;
   }
   if (!startOverall || !startOverall.has(entry.name)) return null;
   return startOverall.get(entry.name) - entry.position;
@@ -332,6 +381,14 @@ function formatClassName(raw) {
     .trim();
 }
 
+function hashColor(str) {
+  let h = 0;
+  const s = String(str || "");
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  const hue = Math.abs(h) % 360;
+  return `hsl(${hue}, 65%, 42%)`;
+}
+
 function classColor(carClass) {
   if (typeof CLASS_COLORS === "undefined") return DEFAULT_COLOR;
   if (carClass && CLASS_COLORS[carClass]) return CLASS_COLORS[carClass];
@@ -346,12 +403,17 @@ function classColor(carClass) {
       if (name === formatted && CLASS_COLORS[raw]) return CLASS_COLORS[raw];
     }
   }
+  if (carClass && carClass !== "—") return hashColor(carClass);
   return DEFAULT_COLOR;
 }
 
 function contrastText(bg) {
   if (!bg) return "#fff";
-  let hex = String(bg).replace("#", "").trim();
+  const s = String(bg).trim();
+  // hsl(h, s%, l%) — usa lightness
+  const hsl = s.match(/hsl\(\s*[\d.]+\s*,\s*[\d.]+%\s*,\s*([\d.]+)%\s*\)/i);
+  if (hsl) return Number(hsl[1]) > 55 ? "#000" : "#fff";
+  let hex = s.replace("#", "");
   if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
   if (hex.length !== 6) return "#fff";
   const r = parseInt(hex.slice(0, 2), 16) / 255;
@@ -772,8 +834,8 @@ function buildDisplayList(standings) {
   if (mode === "Multiclasse") {
     const groups = {};
     standings.forEach((e) => {
-      const cls = e.carClass || "—";
-      (groups[cls] = groups[cls] || []).push(e);
+      const key = groupKey(e, standings);
+      (groups[key] = groups[key] || []).push(e);
     });
 
     const perClass = slotsPerClass(groups);
@@ -818,10 +880,14 @@ function buildDisplayList(standings) {
   }
 
   if (mode === "Minha classe") {
-    const myClass = getStablePlayerClass(standings);
-    if (!myClass) return [];
+    const splitCar = isSplitByCarSession(standings);
+    const me = standings.find((e) => isStablePlayer(e));
+    const myKey = splitCar
+      ? (me && me.carName)
+      : getStablePlayerClass(standings);
+    if (!myKey) return [];
     const ordered = standings
-      .filter((e) => e.carClass === myClass)
+      .filter((e) => (splitCar ? e.carName : e.carClass) === myKey)
       .slice()
       .sort(sortByTiming)
       .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 }));
@@ -843,6 +909,10 @@ function buildDisplayList(standings) {
 function currentPageLabel(standings) {
   const mode = currentPageMode(standings);
   if (mode === "Minha classe") {
+    if (isSplitByCarSession(standings)) {
+      const me = standings.find((e) => isStablePlayer(e));
+      return (me && me.carName) || "Minha classe";
+    }
     const cls = getStablePlayerClass(standings);
     return (cls && formatClassName(cls)) || "Minha classe";
   }
@@ -876,7 +946,7 @@ function render(standings) {
   const bestSectorsByClass = {};
   const bestSectorsOverall = [null, null, null];
   standings.forEach((e) => {
-    const cls = e.carClass || "—";
+    const cls = groupKey(e, standings);
     if (e.fastestLapMs > 0 && (bestFastestByClass[cls] == null || e.fastestLapMs < bestFastestByClass[cls])) {
       bestFastestByClass[cls] = e.fastestLapMs;
     }
@@ -905,7 +975,7 @@ function render(standings) {
   {
     const byClass = {};
     standings.slice().sort((a, b) => a.position - b.position).forEach((e) => {
-      const cls = e.carClass || "—";
+      const cls = groupKey(e, standings);
       if (!byClass[cls]) byClass[cls] = [];
       byClass[cls].push(e);
     });
@@ -915,8 +985,9 @@ function render(standings) {
     });
     if (isClassMode) {
       Object.values(byClass).forEach((list) => {
-        list.forEach((e, i) => {
-          e._aheadDistance = i > 0 ? list[i - 1].totalDistance : null;
+        const sorted = list.slice().sort(sortByTiming);
+        sorted.forEach((e, i) => {
+          e._aheadDistance = i > 0 ? sorted[i - 1].totalDistance : null;
         });
       });
     }
@@ -1022,7 +1093,7 @@ function render(standings) {
     el.classList.toggle("player", playerHighlightEnabled && isDriving);
     el.classList.toggle("dnf", isDnf(entry));
     let isPurple = false;
-    const cls = entry.carClass || "—";
+    const cls = groupKey(entry, standings);
     const sessionBest = isClassMode ? bestFastestByClass[cls] : bestOverallFastest;
     if (mode === "Melhor volta") {
       isPurple = entry.fastestLapMs > 0 && entry.fastestLapMs === sessionBest;
@@ -1032,7 +1103,7 @@ function render(standings) {
       isPurple = false;
     }
     el.classList.toggle("fastest", isPurple);
-    const clr = classColor(entry.carClass);
+    const clr = classColor(isSplitByCarSession(standings) ? groupKey(entry, standings) : entry.carClass);
     el.style.borderTopColor = clr;
     el.classList.toggle("yellow-flag", !!entry.causedYellow);
     if (!el.classList.contains("flash-up") && !el.classList.contains("flash-down")) {
@@ -1081,12 +1152,13 @@ function render(standings) {
       logoImg.style.display = "none";
     }
 
-    const change = positionChange(entry, item.displayPosition, isClassMode);
+    const change = positionChange(entry, item.displayPosition, isClassMode, standings);
     const gapRef = (typeof entry._aheadDistance === "number") ? entry._aheadDistance : prevDistance;
     posEl.textContent = item.displayPosition;
     el.querySelector(".name-text").textContent = entry.name;
-    const rowBestFastest = (isClassMode && bestFastestByClass[entry.carClass || "—"] != null)
-      ? bestFastestByClass[entry.carClass || "—"]
+    const gKey = groupKey(entry, standings);
+    const rowBestFastest = (isClassMode && bestFastestByClass[gKey] != null)
+      ? bestFastestByClass[gKey]
       : (bestFastestMs != null ? bestFastestMs : bestOverallFastest);
     const aheadFast = item.aheadFastestMs != null ? item.aheadFastestMs : prevFastestMs;
     const rv = rightColumnValue(entry, change, gapRef, rowBestFastest, groupLeaderDistance, aheadFast);
