@@ -16,11 +16,12 @@ let cache = {
   standings: null,
   classes: [],
   drivers: [],
+  standingsRows: [],
 };
 
 function setApiKey(key) {
   apiKey = String(key || "").trim();
-  cache = { league: null, seasons: null, seasonDetail: null, standings: null, classes: [], drivers: [] };
+  cache = { league: null, seasons: null, seasonDetail: null, standings: null, classes: [], drivers: [], standingsRows: [] };
   selectedSeasonId = null;
   stopRefresh();
 }
@@ -104,9 +105,62 @@ function pushAlias(set, value) {
   if (n) set.add(n);
 }
 
+function collectDriverStandings(standingsData) {
+  // lista principal = standings gerais; classes só enriquecem via classMap
+  const out = [];
+  const seen = new Set();
+  function addAll(arr) {
+    (arr || []).forEach((d) => {
+      const key = String(d.driverName || d.uniqueName || "").toLowerCase();
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      out.push(d);
+    });
+  }
+  if (!standingsData) return out;
+  const stats = standingsData.seasonStatistics || standingsData;
+  addAll(stats.driverStandings);
+  addAll(standingsData.driverStandings);
+  if (!out.length) {
+    const classBlocks = stats.classes || standingsData.classes || [];
+    classBlocks.forEach((block) => {
+      const cs = block.classStatistics || block;
+      const classInfo = block.classInfo || null;
+      (cs.driverStandings || []).forEach((d) => {
+        if (classInfo && !d.classInfo) d.classInfo = classInfo;
+      });
+      addAll(cs.driverStandings);
+    });
+  }
+  return out;
+}
+
+function collectClassStandingsMap(standingsData) {
+  // driverName → { position, points, classInfo } from class-specific tables
+  const map = new Map();
+  if (!standingsData) return map;
+  const stats = standingsData.seasonStatistics || standingsData;
+  const classBlocks = stats.classes || standingsData.classes || [];
+  classBlocks.forEach((block) => {
+    const cs = block.classStatistics || block;
+    const classInfo = block.classInfo || null;
+    (cs.driverStandings || []).forEach((d) => {
+      const key = String(d.driverName || "").toLowerCase();
+      if (!key) return;
+      map.set(key, {
+        position: d.position,
+        points: d.points,
+        positionChange: d.positionChange,
+        classInfo: d.classInfo || classInfo,
+      });
+    });
+  });
+  return map;
+}
+
 function buildDrivers(standingsData, classes) {
   const list = [];
-  const drivers = (standingsData && standingsData.seasonStatistics && standingsData.seasonStatistics.driverStandings) || [];
+  const drivers = collectDriverStandings(standingsData);
   const classByUnique = {};
   (classes || []).forEach((c) => {
     classByUnique[c.uniqueName] = c;
@@ -166,6 +220,96 @@ function buildDrivers(standingsData, classes) {
   return list;
 }
 
+function parsePoints(p) {
+  if (p == null) return { text: "0", raw: 0 };
+  if (typeof p === "number") return { text: String(p), raw: p };
+  if (typeof p === "string") {
+    const n = Number(String(p).replace(",", "."));
+    return { text: p, raw: Number.isFinite(n) ? n : 0 };
+  }
+  if (p.formatted != null && String(p.formatted).trim() !== "") {
+    const n = Number(String(p.formatted).replace(",", "."));
+    return { text: String(p.formatted), raw: Number.isFinite(n) ? n : 0 };
+  }
+  const raw = p.raw != null ? Number(p.raw) : 0;
+  return {
+    text: Number.isFinite(raw) ? String(raw) : "0",
+    raw: Number.isFinite(raw) ? raw : 0,
+  };
+}
+
+function buildStandingsRows(standingsData, classes) {
+  const drivers = collectDriverStandings(standingsData);
+  const classMap = collectClassStandingsMap(standingsData);
+  const classByUnique = {};
+  (classes || []).forEach((c) => {
+    classByUnique[c.uniqueName] = c;
+  });
+  return drivers.map((d) => {
+    const di = d.driverInfo || {};
+    const info = d.classInfo || null;
+    const key = String(d.driverName || "").toLowerCase();
+    const classRow = classMap.get(key) || null;
+    const classInfo = (classRow && classRow.classInfo) || info;
+    const cls = classInfo ? (classByUnique[classInfo.uniqueName] || classInfo) : null;
+    const firstName = di.firstName || null;
+    const lastName = di.lastName || null;
+    const displayName =
+      firstName && lastName
+        ? `${firstName} ${lastName}`.trim()
+        : di.displayName || di.realName || d.driverName || "—";
+    let color = (cls && cls.color) || (classInfo && classInfo.color) || null;
+    if (color) {
+      let hx = String(color).trim();
+      if (hx.startsWith("#")) hx = hx.slice(1);
+      if (/^[0-9a-fA-F]{8}$/.test(hx)) color = `#${hx.slice(2, 8)}`;
+      else if (/^[0-9a-fA-F]{6}$/.test(hx)) color = `#${hx}`;
+      else if (/^[0-9a-fA-F]{3}$/.test(hx)) color = `#${hx}`;
+    }
+    const description = di.description || d.description || null;
+    const aliases = new Set();
+    if (description) {
+      String(description)
+        .split(/[,;|/\n]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .forEach((s) => pushAlias(aliases, s));
+    }
+    pushAlias(aliases, d.driverName);
+    pushAlias(aliases, displayName);
+    pushAlias(aliases, firstName);
+    pushAlias(aliases, lastName);
+    const ptsOverall = parsePoints(d.points);
+    const ptsClass = classRow ? parsePoints(classRow.points) : ptsOverall;
+    const classPos =
+      (classRow && classRow.position) ||
+      (classInfo && classInfo.classPosition) ||
+      d.position ||
+      999;
+    return {
+      position: d.position != null ? d.position : 999,
+      classPosition: classPos,
+      driverName: d.driverName,
+      displayName,
+      firstName,
+      lastName,
+      points: ptsOverall.text,
+      pointsRaw: ptsOverall.raw,
+      classPoints: ptsClass.text,
+      classPointsRaw: ptsClass.raw,
+      gapToLeader: d.gapToLeader || null,
+      gapToAhead: d.gapToAhead || null,
+      positionChange: d.positionChange != null ? d.positionChange : null,
+      classPositionChange: classRow && classRow.positionChange != null ? classRow.positionChange : null,
+      teamName: d.teamName || null,
+      classUniqueName: (cls && cls.uniqueName) || (classInfo && classInfo.uniqueName) || "—",
+      className: (cls && cls.name) || (classInfo && classInfo.name) || "—",
+      color,
+      aliases: Array.from(aliases),
+    };
+  });
+}
+
 async function selectSeason(seasonId) {
   selectedSeasonId = Number(seasonId);
   const detail = await fetchSeasonDetail(selectedSeasonId);
@@ -180,6 +324,7 @@ async function selectSeason(seasonId) {
     standings = null;
   }
   cache.drivers = buildDrivers(standings, classes);
+  cache.standingsRows = buildStandingsRows(standings, classes);
   startRefresh();
   return getOverlayPayload();
 }
@@ -234,6 +379,7 @@ function getOverlayPayload() {
     seasonName: season && (season.fullName || season.seasonName),
     classes: cache.classes || [],
     drivers: cache.drivers || [],
+    standingsRows: cache.standingsRows || [],
   };
 }
 

@@ -526,11 +526,11 @@ function applyOverlayCommand(name) {
   } else if (name === "overlay.prevPage") {
     const modes = activePageModes(latestStandings);
     if (modes.length <= 1) return;
-    pageIndex = (pageIndex - 1 + modes.length) % modes.length;
+    pageIndex = ((Number(pageIndex) || 0) % modes.length + modes.length - 1) % modes.length;
   } else if (name === "overlay.nextPage") {
     const modes = activePageModes(latestStandings);
     if (modes.length <= 1) return;
-    pageIndex = (pageIndex + 1) % modes.length;
+    pageIndex = ((Number(pageIndex) || 0) % modes.length + 1) % modes.length;
   } else if (name === "overlay.toggleHighlight") {
     playerHighlightEnabled = !playerHighlightEnabled;
   } else if (name === "overlay.toggleStandings") {
@@ -1155,6 +1155,11 @@ function buildDisplayList(standings) {
 function currentPageLabel(standings) {
   const mode = currentPageMode(standings);
   if (mode === "Minha classe") {
+    if (rltEnabled()) {
+      const me = (standings || []).find((e) => isStablePlayer(e));
+      const info = me ? rltLookup(me) : null;
+      if (info && (info.name || info.uniqueName)) return info.name || info.uniqueName;
+    }
     if (isSplitByCarSession(standings)) {
       const me = standings.find((e) => isStablePlayer(e));
       return (me && me.carName) || "Minha classe";
@@ -1239,45 +1244,63 @@ function assistedClassKey(standings) {
   return null;
 }
 
+function classStandingPos(r) {
+  return r.classPosition != null ? r.classPosition : r.position || 999;
+}
+
 function buildStandingsDisplayList(standings) {
   const rows = (rltConfig && rltConfig.standingsRows) || [];
   if (!rows.length) return [];
   const mode = currentPageMode(standings);
 
-  function asItems(list) {
+  function asItems(list, classMode) {
     return list
       .slice()
-      .sort((a, b) => (a.position || 999) - (b.position || 999))
-      .map((r) => ({ type: "row", row: r }));
+      .sort((a, b) => {
+        if (classMode) return classStandingPos(a) - classStandingPos(b);
+        return (a.position || 999) - (b.position || 999);
+      })
+      .map((r, i) => ({
+        type: "row",
+        row: r,
+        displayPosition: classMode ? classStandingPos(r) : r.position,
+        classMode: !!classMode,
+      }));
   }
 
   if (mode === "Multiclasse") {
     const groups = {};
     rows.forEach((r) => {
       const k = r.classUniqueName || r.className || "—";
+      if (k === "—") return;
       (groups[k] = groups[k] || []).push(r);
     });
     const list = [];
-    Object.keys(groups).forEach((k) => {
-      const label = groups[k][0].className || k;
-      list.push({ type: "header", label: k, title: label, color: groups[k][0].color });
-      const sorted = groups[k].slice().sort((a, b) => (a.position || 999) - (b.position || 999));
-      sorted.forEach((r, i) => list.push({ type: "row", row: r, displayPosition: i + 1 }));
-    });
+    Object.keys(groups)
+      .sort((a, b) => {
+        const na = (groups[a][0] && groups[a][0].className) || a;
+        const nb = (groups[b][0] && groups[b][0].className) || b;
+        return String(na).localeCompare(String(nb));
+      })
+      .forEach((k) => {
+        const label = groups[k][0].className || k;
+        list.push({ type: "header", label: k, title: label, color: groups[k][0].color });
+        const sorted = groups[k].slice().sort((a, b) => classStandingPos(a) - classStandingPos(b));
+        sorted.forEach((r, i) =>
+          list.push({ type: "row", row: r, displayPosition: i + 1, classMode: true })
+        );
+      });
     return list;
   }
 
   if (mode === "Minha classe") {
     const myKey = assistedClassKey(standings);
-    if (!myKey) return asItems(rows);
+    if (!myKey) return asItems(rows, false);
     const filtered = rows.filter((r) => r.classUniqueName === myKey || r.className === myKey);
-    return filtered
-      .slice()
-      .sort((a, b) => (a.position || 999) - (b.position || 999))
-      .map((r, i) => ({ type: "row", row: r, displayPosition: i + 1 }));
+    return asItems(filtered, true);
   }
 
-  return asItems(rows);
+  return asItems(rows, false);
 }
 
 function renderStandings(standings) {
@@ -1290,6 +1313,7 @@ function renderStandings(standings) {
   const seasonName = (rltConfig && rltConfig.seasonName) || "STANDINGS";
   sessionLabel.textContent = "STANDINGS";
   timerEl.textContent = seasonName;
+  timerEl.style.fontSize = seasonName.length > 22 ? "22px" : "26px";
   pageLabel.textContent = currentPageLabel(standings);
   const colMode = STANDINGS_COLUMN_MODES[standingsColumnIndex];
   rightLabel.textContent = colMode;
@@ -1302,18 +1326,47 @@ function renderStandings(standings) {
   const projected = new Map();
   displayList.forEach((item) => {
     if (item.type !== "row") return;
-    const base = Number(item.row.pointsRaw) || 0;
+    const base = item.classMode
+      ? Number(item.row.classPointsRaw != null ? item.row.classPointsRaw : item.row.pointsRaw) || 0
+      : Number(item.row.pointsRaw) || 0;
     const racePos = lookupLivePos(item.row, liveMap);
     const add = inRace && racePos ? racePointsForPos(racePos) : 0;
-    projected.set(item.row, base + add);
+    projected.set(item.row, { base, add, total: base + add, racePos });
   });
+
+  // ranking atual vs projetado por grupo
+  const rankDelta = new Map();
+  {
+    const groups = {};
+    displayList.forEach((item) => {
+      if (item.type !== "row") return;
+      const g = item.classMode ? item.row.classUniqueName || "—" : "_all";
+      (groups[g] = groups[g] || []).push(item);
+    });
+    Object.values(groups).forEach((items) => {
+      const score = (r, key) => {
+        const p = projected.get(r) || {};
+        const v = Number(p[key]);
+        return Number.isFinite(v) ? v : 0;
+      };
+      const byBase = items.slice().sort((a, b) => score(b.row, "base") - score(a.row, "base"));
+      const byProj = items.slice().sort((a, b) => score(b.row, "total") - score(a.row, "total"));
+      const curRank = new Map();
+      const projRank = new Map();
+      byBase.forEach((it, i) => curRank.set(it.row, i + 1));
+      byProj.forEach((it, i) => projRank.set(it.row, i + 1));
+      items.forEach((it) => {
+        rankDelta.set(it.row, (curRank.get(it.row) || 0) - (projRank.get(it.row) || 0));
+      });
+    });
+  }
 
   const leaderByGroup = new Map();
   if (colMode === "Gap líder") {
     let overallLeader = 0;
     displayList.forEach((item) => {
       if (item.type !== "row") return;
-      const pts = projected.get(item.row) || 0;
+      const pts = (projected.get(item.row) || {}).total || 0;
       const g = classMode ? item.row.classUniqueName || "—" : "_all";
       const cur = leaderByGroup.get(g) || 0;
       if (pts > cur) leaderByGroup.set(g, pts);
@@ -1324,6 +1377,17 @@ function renderStandings(standings) {
 
   while (container.children.length > displayList.length) {
     container.removeChild(container.lastChild);
+  }
+
+  const me = (standings || []).find((e) => isStablePlayer(e));
+  const meInfo = me ? rltLookup(me) : null;
+  const meKeys = new Set();
+  if (me) {
+    meKeys.add(normalizeDriverName(me.name));
+    if (meInfo) {
+      meKeys.add(normalizeDriverName(meInfo.displayName));
+      (meInfo.aliases || []).forEach((a) => meKeys.add(a));
+    }
   }
 
   displayList.forEach((item, i) => {
@@ -1369,7 +1433,17 @@ function renderStandings(standings) {
     const pos = item.displayPosition != null ? item.displayPosition : row.position;
     const clr = row.color || classColor(row.classUniqueName);
     el.style.borderTopColor = clr || "";
-    el.style.backgroundColor = "#0e42a5";
+    let isAssisted = false;
+    if (playerHighlightEnabled && meKeys.size) {
+      const rowKeys = [
+        normalizeDriverName(row.displayName),
+        normalizeDriverName(row.driverName),
+        ...(row.aliases || []),
+      ];
+      isAssisted = rowKeys.some((k) => k && meKeys.has(k));
+    }
+    el.classList.toggle("player", isAssisted);
+    el.style.backgroundColor = isAssisted ? "#006bdd" : "#0e42a5";
     const posEl = el.querySelector(".pos");
     posEl.textContent = String(pos || "—");
     posEl.style.background = clr || "#0e42a5";
@@ -1377,21 +1451,34 @@ function renderStandings(standings) {
     el.querySelector(".name-text").textContent = row.displayName || row.driverName || "—";
 
     const right = el.querySelector(".right-value");
-    const base = Number(row.pointsRaw) || 0;
-    const proj = projected.get(row) != null ? projected.get(row) : base;
-    let text = row.points || "0";
+    const useClass = !!item.classMode;
+    const ptsText = useClass ? (row.classPoints != null ? row.classPoints : row.points) : row.points;
+    const projInfo = projected.get(row) || { base: 0, add: 0, total: 0 };
+    const addPts = Number(projInfo.add) || 0;
+    const totalPts = Number(projInfo.total);
+    const safeTotal = Number.isFinite(totalPts) ? totalPts : Number(projInfo.base) || 0;
+    let text = String(ptsText || "0");
     let cls = "";
     if (colMode === "Pts") {
-      const delta = formatPosDelta(row.positionChange);
-      text = delta.text !== "=" ? `${row.points || "0"} ${delta.text}` : (row.points || "0");
-      cls = delta.cls;
+      const delta = formatPosDelta(useClass ? row.classPositionChange : row.positionChange);
+      text = delta.text !== "=" ? `${ptsText || "0"} ${delta.text}` : String(ptsText || "0");
+      cls = delta.cls || "";
     } else if (colMode === "Pts proj.") {
-      text = String(proj);
+      if (!inRace) {
+        text = "—";
+        cls = "";
+      } else {
+        const deltaRank = Number(rankDelta.get(row)) || 0;
+        const rd = formatPosDelta(deltaRank);
+        text = "+" + String(addPts) + (rd.text !== "=" ? " " + rd.text : "");
+        cls = rd.cls || "";
+      }
     } else if (colMode === "Gap líder") {
       const g = classMode ? row.classUniqueName || "—" : "_all";
-      const leaderPts = leaderByGroup.get(g) || 0;
-      const gap = leaderPts - proj;
-      text = gap <= 0 ? "—" : `-${gap}`;
+      const leaderPts = Number(leaderByGroup.get(g)) || 0;
+      const gap = leaderPts - safeTotal;
+      text = !Number.isFinite(gap) || gap <= 0 ? "—" : "-" + String(gap);
+      cls = "";
     }
     right.className = "col right-value" + (cls ? " " + cls : "");
     right.textContent = text;
