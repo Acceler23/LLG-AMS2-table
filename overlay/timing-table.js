@@ -16,6 +16,195 @@ const SPLIT_BY_CAR_CLASSES = new Set([
   "TSICup",
 ]);
 
+let rltConfig = null;
+const RLT_MATCH_MIN = 0.98;
+
+function normalizeDriverName(name) {
+  return String(name || "")
+    .replace(/\[[^\]]*\]/g, "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function levenshtein(a, b) {
+  const m = a.length;
+  const n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + cost);
+      prev = tmp;
+    }
+  }
+  return dp[n];
+}
+
+function nameSimilarity(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const maxLen = Math.max(a.length, b.length);
+  if (!maxLen) return 0;
+  return 1 - levenshtein(a, b) / maxLen;
+}
+
+const rltLookupCache = new Map();
+
+function tokenJaccard(aTokens, bTokens) {
+  if (!aTokens.length || !bTokens.length) return 0;
+  const A = new Set(aTokens);
+  const B = new Set(bTokens);
+  let inter = 0;
+  A.forEach((t) => {
+    if (B.has(t)) inter += 1;
+  });
+  return inter / (A.size + B.size - inter);
+}
+
+function scoreAlias(target, targetTokens, targetLast, al) {
+  if (!al) return 0;
+  let score = nameSimilarity(target, al);
+  if (score >= RLT_MATCH_MIN) return score;
+
+  const alTokens = al.split(" ").filter(Boolean);
+  const alLast = alTokens[alTokens.length - 1] || "";
+  const alFirst = alTokens[0] || "";
+
+  score = Math.max(score, tokenJaccard(targetTokens, alTokens));
+
+  if (targetLast && alLast && targetLast === alLast && targetLast.length >= 3) {
+    score = Math.max(score, 0.99);
+    if (targetTokens.length >= 2) {
+      const t0 = targetTokens[0].replace(/\./g, "");
+      if (t0.length === 1 && alFirst.startsWith(t0)) score = Math.max(score, 0.995);
+    }
+  }
+
+  if (targetTokens.length === 1) {
+    const tok = targetTokens[0];
+    if (tok.length >= 3) {
+      for (const t of alTokens) {
+        if (t === tok) score = Math.max(score, 1);
+        else {
+          const sim = nameSimilarity(tok, t);
+          if (sim >= 0.9) score = Math.max(score, sim);
+          if (t.startsWith(tok) || tok.startsWith(t)) {
+            const ratio = Math.min(t.length, tok.length) / Math.max(t.length, tok.length);
+            if (ratio >= 0.8) score = Math.max(score, ratio);
+          }
+        }
+      }
+      if (al === tok) score = 1;
+      if (al.includes(tok) && tok.length >= 4) score = Math.max(score, 0.98);
+    }
+  }
+
+  if (target.includes(al) || al.includes(target)) {
+    const ratio = Math.min(target.length, al.length) / Math.max(target.length, al.length);
+    if (ratio >= 0.75) score = Math.max(score, Math.max(ratio, 0.9));
+  }
+
+  if (targetTokens.length === 2 && targetTokens[0].replace(/\./g, "").length === 1 && alTokens.length >= 2) {
+    const ini = targetTokens[0].replace(/\./g, "");
+    if (alFirst.startsWith(ini) && targetLast === alLast) score = Math.max(score, 0.995);
+  }
+
+  return score;
+}
+
+function rltLookupByMap(raw) {
+  if (typeof RLT_INGAME_MAP === "undefined" || !RLT_INGAME_MAP) return null;
+  const key = Object.keys(RLT_INGAME_MAP).find(
+    (k) => normalizeDriverName(k) === normalizeDriverName(raw)
+  );
+  if (!key) return null;
+  const want = normalizeDriverName(RLT_INGAME_MAP[key]);
+  if (!rltConfig || !Array.isArray(rltConfig.drivers)) return null;
+  for (const d of rltConfig.drivers) {
+    if (normalizeDriverName(d.displayName) === want) return d;
+    if (normalizeDriverName(`${d.firstName || ""} ${d.lastName || ""}`) === want) return d;
+    if ((d.aliases || []).some((a) => a === want)) return d;
+  }
+  return null;
+}
+
+function rltLookup(entry) {
+  if (!rltConfig || !Array.isArray(rltConfig.drivers) || !rltConfig.drivers.length) return null;
+  const raw = entry.name || "";
+  if (rltLookupCache.has(raw)) return rltLookupCache.get(raw);
+
+  const mapped = rltLookupByMap(raw);
+  if (mapped) {
+    rltLookupCache.set(raw, mapped);
+    return mapped;
+  }
+
+  const target = normalizeDriverName(raw);
+  if (!target || target === "player") {
+    rltLookupCache.set(raw, null);
+    return null;
+  }
+  const targetTokens = target.split(" ").filter(Boolean);
+  const targetLast = targetTokens[targetTokens.length - 1] || "";
+
+  let best = null;
+  let bestScore = 0;
+  for (const d of rltConfig.drivers) {
+    for (const al of d.aliases || []) {
+      const score = scoreAlias(target, targetTokens, targetLast, al);
+      if (score > bestScore) {
+        bestScore = score;
+        best = d;
+      }
+      if (score >= 1) break;
+    }
+    if (d.firstName) {
+      const fn = normalizeDriverName(`${d.firstName} ${d.lastName || ""}`);
+      const score = scoreAlias(target, targetTokens, targetLast, fn);
+      if (score > bestScore) {
+        bestScore = score;
+        best = d;
+      }
+    }
+    if (d.lastName) {
+      const ln = normalizeDriverName(d.lastName);
+      if (targetLast === ln && ln.length >= 3) {
+        const score = targetTokens.length === 1 ? 0.99 : 0.985;
+        if (score > bestScore) {
+          bestScore = score;
+          best = d;
+        }
+      }
+    }
+    if (bestScore >= 1) break;
+  }
+  const hit = best && bestScore >= RLT_MATCH_MIN ? best : null;
+  rltLookupCache.set(raw, hit);
+  return hit;
+}
+
+function rltDisplayName(entry) {
+  const info = rltLookup(entry);
+  if (!info) return entry.name;
+  if (info.firstName && info.lastName) return `${info.firstName} ${info.lastName}`.trim();
+  if (info.displayName) return info.displayName;
+  return entry.name;
+}
+
+function rltEnabled() {
+  return !!(rltConfig && rltConfig.classes && rltConfig.classes.length > 0);
+}
+
 function countClasses(standings) {
   const set = new Set();
   (standings || []).forEach((e) => {
@@ -33,17 +222,34 @@ function countCars(standings) {
 }
 
 function isSplitByCarSession(standings) {
+  if (rltEnabled()) return false;
   if (countClasses(standings) !== 1) return false;
   const cls = (standings.find((e) => e.carClass) || {}).carClass;
   return !!(cls && SPLIT_BY_CAR_CLASSES.has(cls));
 }
 
 function groupKey(entry, standings) {
+  if (rltEnabled()) {
+    const info = rltLookup(entry);
+    if (info) return info.uniqueName || info.name;
+    return "—";
+  }
   if (isSplitByCarSession(standings)) return entry.carName || "—";
   return entry.carClass || "—";
 }
 
+function groupLabel(key) {
+  if (rltEnabled() && rltConfig.classes) {
+    const c = rltConfig.classes.find((x) => x.uniqueName === key || x.name === key);
+    if (c) return c.name || c.uniqueName;
+  }
+  return key;
+}
+
 function activePageModes(standings) {
+  if (rltEnabled()) {
+    return rltConfig.classes.length > 1 ? PAGE_MODES_ALL : ["Geral"];
+  }
   if (isSplitByCarSession(standings)) {
     return countCars(standings) > 1 ? PAGE_MODES_ALL : ["Geral"];
   }
@@ -295,6 +501,10 @@ function connect() {
       render(latestStandings);
     } else if (msg.type === "overlayCommand") {
       applyOverlayCommand(msg.name);
+    } else if (msg.type === "rltConfig") {
+      rltConfig = msg.data || null;
+      rltLookupCache.clear();
+      if (latestStandings.length) render(latestStandings);
     }
   });
   socket.addEventListener("close", () => setTimeout(connect, 2000));
@@ -302,9 +512,17 @@ function connect() {
 
 function applyOverlayCommand(name) {
   if (name === "overlay.prevColumn") {
-    rightColumnIndex = (rightColumnIndex - 1 + RIGHT_COLUMN_MODES.length) % RIGHT_COLUMN_MODES.length;
+    if (standingsView) {
+      standingsColumnIndex = (standingsColumnIndex - 1 + STANDINGS_COLUMN_MODES.length) % STANDINGS_COLUMN_MODES.length;
+    } else {
+      rightColumnIndex = (rightColumnIndex - 1 + RIGHT_COLUMN_MODES.length) % RIGHT_COLUMN_MODES.length;
+    }
   } else if (name === "overlay.nextColumn") {
-    rightColumnIndex = (rightColumnIndex + 1) % RIGHT_COLUMN_MODES.length;
+    if (standingsView) {
+      standingsColumnIndex = (standingsColumnIndex + 1) % STANDINGS_COLUMN_MODES.length;
+    } else {
+      rightColumnIndex = (rightColumnIndex + 1) % RIGHT_COLUMN_MODES.length;
+    }
   } else if (name === "overlay.prevPage") {
     const modes = activePageModes(latestStandings);
     if (modes.length <= 1) return;
@@ -315,6 +533,8 @@ function applyOverlayCommand(name) {
     pageIndex = (pageIndex + 1) % modes.length;
   } else if (name === "overlay.toggleHighlight") {
     playerHighlightEnabled = !playerHighlightEnabled;
+  } else if (name === "overlay.toggleStandings") {
+    standingsView = !standingsView;
   } else {
     return;
   }
@@ -389,7 +609,25 @@ function hashColor(str) {
   return `hsl(${hue}, 65%, 42%)`;
 }
 
+function normalizeColor(c) {
+  if (!c) return null;
+  let s = String(c).trim();
+  if (!s) return null;
+  if (s.startsWith("rgb") || s.startsWith("hsl")) return s;
+  if (s.startsWith("#")) s = s.slice(1);
+  // AARRGGBB (RLT/WPF) → #RRGGBB
+  if (/^[0-9a-fA-F]{8}$/.test(s)) return `#${s.slice(2, 8)}`;
+  if (/^[0-9a-fA-F]{6}$/.test(s)) return `#${s}`;
+  if (/^[0-9a-fA-F]{3}$/.test(s)) return `#${s}`;
+  return c;
+}
+
 function classColor(carClass) {
+  if (rltEnabled() && rltConfig.classes) {
+    const c = rltConfig.classes.find((x) => x.uniqueName === carClass || x.name === carClass);
+    const col = c && normalizeColor(c.color);
+    if (col) return col;
+  }
   if (typeof CLASS_COLORS === "undefined") return DEFAULT_COLOR;
   if (carClass && CLASS_COLORS[carClass]) return CLASS_COLORS[carClass];
   const formatted = formatClassName(carClass);
@@ -410,11 +648,11 @@ function classColor(carClass) {
 function contrastText(bg) {
   if (!bg) return "#fff";
   const s = String(bg).trim();
-  // hsl(h, s%, l%) — usa lightness
   const hsl = s.match(/hsl\(\s*[\d.]+\s*,\s*[\d.]+%\s*,\s*([\d.]+)%\s*\)/i);
   if (hsl) return Number(hsl[1]) > 55 ? "#000" : "#fff";
   let hex = s.replace("#", "");
   if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
+  if (hex.length === 8) hex = hex.slice(0, 6);
   if (hex.length !== 6) return "#fff";
   const r = parseInt(hex.slice(0, 2), 16) / 255;
   const g = parseInt(hex.slice(2, 4), 16) / 255;
@@ -880,14 +1118,22 @@ function buildDisplayList(standings) {
   }
 
   if (mode === "Minha classe") {
-    const splitCar = isSplitByCarSession(standings);
     const me = standings.find((e) => isStablePlayer(e));
-    const myKey = splitCar
-      ? (me && me.carName)
-      : getStablePlayerClass(standings);
+    let myKey = null;
+    let matchFn = null;
+    if (rltEnabled() && me) {
+      myKey = groupKey(me, standings);
+      matchFn = (e) => groupKey(e, standings) === myKey;
+    } else if (isSplitByCarSession(standings)) {
+      myKey = me && me.carName;
+      matchFn = (e) => e.carName === myKey;
+    } else {
+      myKey = getStablePlayerClass(standings);
+      matchFn = (e) => e.carClass === myKey;
+    }
     if (!myKey) return [];
     const ordered = standings
-      .filter((e) => (splitCar ? e.carName : e.carClass) === myKey)
+      .filter(matchFn)
       .slice()
       .sort(sortByTiming)
       .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 }));
@@ -919,7 +1165,244 @@ function currentPageLabel(standings) {
   return mode;
 }
 
+let standingsView = false;
+const STANDINGS_COLUMN_MODES = ["Pts", "Pts proj.", "Gap líder"];
+let standingsColumnIndex = 0;
+const RACE_POINTS = [0, 45, 38, 32, 27, 23, 20, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5];
+
+function racePointsForPos(pos) {
+  if (!pos || pos < 1) return 0;
+  if (pos < RACE_POINTS.length) return RACE_POINTS[pos];
+  return 0;
+}
+
+function formatPosDelta(n) {
+  if (n == null || n === 0) return { text: "=", cls: "" };
+  if (n > 0) return { text: `▲${n}`, cls: "pos-up" };
+  return { text: `▼${Math.abs(n)}`, cls: "pos-down" };
+}
+
+function liveRacePosByDriver(standings, classMode) {
+  const map = new Map();
+  if (!standings || !standings.length) return map;
+  if (classMode) {
+    const groups = {};
+    standings.forEach((e) => {
+      const k = groupKey(e, standings);
+      (groups[k] = groups[k] || []).push(e);
+    });
+    Object.values(groups).forEach((list) => {
+      list
+        .slice()
+        .sort((a, b) => a.position - b.position)
+        .forEach((e, i) => {
+          const racePos = i + 1;
+          const info = rltLookup(e);
+          map.set(normalizeDriverName(e.name), racePos);
+          if (info) {
+            map.set(normalizeDriverName(info.displayName || ""), racePos);
+            (info.aliases || []).forEach((a) => map.set(a, racePos));
+          }
+        });
+    });
+  } else {
+    standings.forEach((e) => {
+      const racePos = e.position;
+      const info = rltLookup(e);
+      map.set(normalizeDriverName(e.name), racePos);
+      if (info) {
+        map.set(normalizeDriverName(info.displayName || ""), racePos);
+        (info.aliases || []).forEach((a) => map.set(a, racePos));
+      }
+    });
+  }
+  return map;
+}
+
+function lookupLivePos(row, liveMap) {
+  const keys = [
+    normalizeDriverName(row.displayName),
+    normalizeDriverName(row.driverName),
+    ...(row.aliases || []),
+  ];
+  for (const k of keys) {
+    if (k && liveMap.has(k)) return liveMap.get(k);
+  }
+  return null;
+}
+
+function assistedClassKey(standings) {
+  const me = (standings || []).find((e) => isStablePlayer(e));
+  if (!me) return null;
+  const info = rltLookup(me);
+  if (info) return info.uniqueName || info.name;
+  return null;
+}
+
+function buildStandingsDisplayList(standings) {
+  const rows = (rltConfig && rltConfig.standingsRows) || [];
+  if (!rows.length) return [];
+  const mode = currentPageMode(standings);
+
+  function asItems(list) {
+    return list
+      .slice()
+      .sort((a, b) => (a.position || 999) - (b.position || 999))
+      .map((r) => ({ type: "row", row: r }));
+  }
+
+  if (mode === "Multiclasse") {
+    const groups = {};
+    rows.forEach((r) => {
+      const k = r.classUniqueName || r.className || "—";
+      (groups[k] = groups[k] || []).push(r);
+    });
+    const list = [];
+    Object.keys(groups).forEach((k) => {
+      const label = groups[k][0].className || k;
+      list.push({ type: "header", label: k, title: label, color: groups[k][0].color });
+      const sorted = groups[k].slice().sort((a, b) => (a.position || 999) - (b.position || 999));
+      sorted.forEach((r, i) => list.push({ type: "row", row: r, displayPosition: i + 1 }));
+    });
+    return list;
+  }
+
+  if (mode === "Minha classe") {
+    const myKey = assistedClassKey(standings);
+    if (!myKey) return asItems(rows);
+    const filtered = rows.filter((r) => r.classUniqueName === myKey || r.className === myKey);
+    return filtered
+      .slice()
+      .sort((a, b) => (a.position || 999) - (b.position || 999))
+      .map((r, i) => ({ type: "row", row: r, displayPosition: i + 1 }));
+  }
+
+  return asItems(rows);
+}
+
+function renderStandings(standings) {
+  const container = document.getElementById("rows");
+  const pageLabel = document.getElementById("pageLabel");
+  const rightLabel = document.getElementById("rightColumnLabel");
+  const sessionLabel = document.getElementById("sessionLabel");
+  const timerEl = document.getElementById("sessionTimer");
+
+  const seasonName = (rltConfig && rltConfig.seasonName) || "STANDINGS";
+  sessionLabel.textContent = "STANDINGS";
+  timerEl.textContent = seasonName;
+  pageLabel.textContent = currentPageLabel(standings);
+  const colMode = STANDINGS_COLUMN_MODES[standingsColumnIndex];
+  rightLabel.textContent = colMode;
+
+  const classMode = currentPageMode(standings) !== "Geral";
+  const liveMap = liveRacePosByDriver(standings, classMode);
+  const displayList = buildStandingsDisplayList(standings);
+
+  const inRace = isRaceSession();
+  const projected = new Map();
+  displayList.forEach((item) => {
+    if (item.type !== "row") return;
+    const base = Number(item.row.pointsRaw) || 0;
+    const racePos = lookupLivePos(item.row, liveMap);
+    const add = inRace && racePos ? racePointsForPos(racePos) : 0;
+    projected.set(item.row, base + add);
+  });
+
+  const leaderByGroup = new Map();
+  if (colMode === "Gap líder") {
+    let overallLeader = 0;
+    displayList.forEach((item) => {
+      if (item.type !== "row") return;
+      const pts = projected.get(item.row) || 0;
+      const g = classMode ? item.row.classUniqueName || "—" : "_all";
+      const cur = leaderByGroup.get(g) || 0;
+      if (pts > cur) leaderByGroup.set(g, pts);
+      if (pts > overallLeader) overallLeader = pts;
+    });
+    if (!classMode) leaderByGroup.set("_all", overallLeader);
+  }
+
+  while (container.children.length > displayList.length) {
+    container.removeChild(container.lastChild);
+  }
+
+  displayList.forEach((item, i) => {
+    let el = container.children[i];
+    if (item.type === "header") {
+      if (!el || el.className !== "class-header") {
+        const fresh = document.createElement("div");
+        fresh.className = "class-header";
+        if (el) container.replaceChild(fresh, el);
+        else container.appendChild(fresh);
+        el = fresh;
+      }
+      el.textContent = item.title || groupLabel(item.label) || item.label;
+      const hClr = item.color || classColor(item.label);
+      el.style.borderLeftColor = hClr;
+      el.style.background = hClr;
+      el.style.color = contrastText(hClr);
+      return;
+    }
+
+    if (item.type === "spacer") {
+      if (!el || el.className !== "row spacer") {
+        const fresh = document.createElement("div");
+        fresh.className = "row spacer";
+        fresh.innerHTML = "";
+        if (el) container.replaceChild(fresh, el);
+        else container.appendChild(fresh);
+      }
+      return;
+    }
+
+    const row = item.row;
+    if (!el || !el.classList.contains("row") || el.classList.contains("spacer")) {
+      const fresh = document.createElement("div");
+      fresh.className = "row";
+      fresh.innerHTML =
+        '<span class="col pos"></span><span class="col name"><span class="name-text"></span></span><span class="col right-value"></span>';
+      if (el) container.replaceChild(fresh, el);
+      else container.appendChild(fresh);
+      el = fresh;
+    }
+
+    const pos = item.displayPosition != null ? item.displayPosition : row.position;
+    const clr = row.color || classColor(row.classUniqueName);
+    el.style.borderTopColor = clr || "";
+    el.style.backgroundColor = "#0e42a5";
+    const posEl = el.querySelector(".pos");
+    posEl.textContent = String(pos || "—");
+    posEl.style.background = clr || "#0e42a5";
+    posEl.style.color = contrastText(clr || "#0e42a5");
+    el.querySelector(".name-text").textContent = row.displayName || row.driverName || "—";
+
+    const right = el.querySelector(".right-value");
+    const base = Number(row.pointsRaw) || 0;
+    const proj = projected.get(row) != null ? projected.get(row) : base;
+    let text = row.points || "0";
+    let cls = "";
+    if (colMode === "Pts") {
+      const delta = formatPosDelta(row.positionChange);
+      text = delta.text !== "=" ? `${row.points || "0"} ${delta.text}` : (row.points || "0");
+      cls = delta.cls;
+    } else if (colMode === "Pts proj.") {
+      text = String(proj);
+    } else if (colMode === "Gap líder") {
+      const g = classMode ? row.classUniqueName || "—" : "_all";
+      const leaderPts = leaderByGroup.get(g) || 0;
+      const gap = leaderPts - proj;
+      text = gap <= 0 ? "—" : `-${gap}`;
+    }
+    right.className = "col right-value" + (cls ? " " + cls : "");
+    right.textContent = text;
+  });
+}
+
 function render(standings) {
+  if (standingsView) {
+    renderStandings(standings);
+    return;
+  }
   document.getElementById("rightColumnLabel").textContent = RIGHT_COLUMN_MODES[rightColumnIndex];
   document.getElementById("pageLabel").textContent = currentPageLabel(standings);
 
@@ -1023,7 +1506,7 @@ function render(standings) {
         else container.appendChild(fresh);
         el = fresh;
       }
-      el.textContent = formatClassName(item.label);
+      el.textContent = formatClassName(groupLabel(item.label));
       const hClr = classColor(item.label);
       el.style.borderLeftColor = hClr;
       el.style.background = hClr;
@@ -1103,7 +1586,7 @@ function render(standings) {
       isPurple = false;
     }
     el.classList.toggle("fastest", isPurple);
-    const clr = classColor(isSplitByCarSession(standings) ? groupKey(entry, standings) : entry.carClass);
+    const clr = classColor(groupKey(entry, standings));
     el.style.borderTopColor = clr;
     el.classList.toggle("yellow-flag", !!entry.causedYellow);
     if (!el.classList.contains("flash-up") && !el.classList.contains("flash-down")) {
@@ -1155,7 +1638,7 @@ function render(standings) {
     const change = positionChange(entry, item.displayPosition, isClassMode, standings);
     const gapRef = (typeof entry._aheadDistance === "number") ? entry._aheadDistance : prevDistance;
     posEl.textContent = item.displayPosition;
-    el.querySelector(".name-text").textContent = entry.name;
+    el.querySelector(".name-text").textContent = rltDisplayName(entry);
     const gKey = groupKey(entry, standings);
     const rowBestFastest = (isClassMode && bestFastestByClass[gKey] != null)
       ? bestFastestByClass[gKey]
@@ -1211,6 +1694,11 @@ function formatTime(ms) {
 document.addEventListener("keydown", (e) => {
   const c = e.code;
   const k = e.key;
+  if (c === "Digit0" || c === "Numpad0" || k === "0") {
+    standingsView = !standingsView;
+    render(latestStandings);
+    return;
+  }
   if (c === "Comma" || k === ",") applyOverlayCommand("overlay.prevColumn");
   else if (c === "Period" || k === ".") applyOverlayCommand("overlay.nextColumn");
   else if (c === "BracketLeft" || k === "[" || k === "{") applyOverlayCommand("overlay.prevPage");

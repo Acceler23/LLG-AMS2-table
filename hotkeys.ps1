@@ -1,5 +1,5 @@
 # Hotkeys globais — funciona com o jogo em foco
-# , . = coluna | [ ] = pagina | P = destaque
+# , . = coluna | [ ] = pagina | P = destaque | 0 = standings
 # Se o AMS2 estiver como Admin, rode este script tambem como Admin.
 
 $ErrorActionPreference = "Continue"
@@ -63,7 +63,7 @@ public class KbHook {
       if (vk != _lastVk || (now - _lastTick) > 200) {
         _lastVk = vk;
         _lastTick = now;
-        if (vk == 0xBC || vk == 0xBE || vk == 0xDB || vk == 0xDD || vk == 0x50)
+        if (vk == 0xBC || vk == 0xBE || vk == 0xDB || vk == 0xDD || vk == 0x50 || vk == 0x30 || vk == 0x60)
           Queue.Enqueue(vk);
       }
     }
@@ -110,7 +110,7 @@ function Send-Cmd([string]$name) {
 
 try {
   [KbHook]::Start()
-  Write-Host "Hook OK. Teclas: , . [ ] P"
+  Write-Host "Hook OK. Teclas: , . [ ] P 0"
   Write-Host "Se o jogo for Admin, rode este script como Admin."
   Write-Host "Feche a janela para sair."
 
@@ -124,6 +124,8 @@ try {
         0xDB { if (Send-Cmd "overlay.prevPage") { Write-Host "[[] pagina -" } }
         0xDD { if (Send-Cmd "overlay.nextPage") { Write-Host "[]] pagina +" } }
         0x50 { if (Send-Cmd "overlay.toggleHighlight") { Write-Host "[P] destaque" } }
+        0x30 { if (Send-Cmd "overlay.toggleStandings") { Write-Host "[0] standings" } }
+        0x60 { if (Send-Cmd "overlay.toggleStandings") { Write-Host "[0] standings" } }
       }
     }
   })

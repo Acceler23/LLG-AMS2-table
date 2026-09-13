@@ -244,6 +244,10 @@ const CLASS_COLORS = {
   "Volkswagen Virtus GTS": "#640909",
   "Volkswagen Polo": "#1c6199",
   "Volkswagen Polo GTS": "#1f357e",
+
+  //Driver Class
+  "Amador": "#bd0000",
+  "Pro": "#009200",
 };
 
 const DEFAULT_COLOR = "rgb(0, 98, 255)";
