@@ -1,3 +1,6 @@
+//  API key: bdc181b61f277ee632fce5c1af6d2b46ef836def631b102545384d5e9d1ececc
+//  Public Cloud: 9GSB
+
 const CLASS_NAME_OVERRIDES = {
   "SafetyCar": "Safety Car",
   "ARC_Cam": "ARC Camaro",
@@ -108,6 +111,18 @@ const CLASS_NAME_OVERRIDES = {
   "TSICup": "TSI Cup",
   "TC60S": "Vintage Tier 1",
   "TC60S2": "Vintage Tier 2",
+
+  //Cars
+  "Porsche 911 GT3 Cup 4.0": "Cup Pro",
+  "Porsche 911 GT3 Cup 3.8": "Cup AM",
+  "Mitsubishi Lancer RS": "Lancer PRO",
+  "Mitsubishi Lancer R": "Lancer AM",
+  "Ligier JS2 R": "GT",
+  "Ligier JS P4": "P4",
+  "Volkswagen Virtus": "Virtus",
+  "Volkswagen Virtus GTS": "Virtus GTS",
+  "Volkswagen Polo": "Polo",
+  "Volkswagen Polo GTS": "Polo GTS",
 };
 
 const CLASS_COLORS = {
@@ -220,6 +235,18 @@ const CLASS_COLORS = {
   "TSICup": "#001e50",
   "TC60S": "#df8826",
   "TC60S2": "#a2a2a1",
+
+  //Cars
+  "Porsche 911 GT3 Cup 4.0": "#d11212",
+  "Porsche 911 GT3 Cup 3.8": "#128512",
+  "Mitsubishi Lancer RS": "#d11212",
+  "Mitsubishi Lancer R": "#128512",
+  "Ligier JS2 R": "#d11212",
+  "Ligier JS P4": "#1d60dd",
+  "Volkswagen Virtus": "#d32a2a",
+  "Volkswagen Virtus GTS": "#640909",
+  "Volkswagen Polo": "#1c6199",
+  "Volkswagen Polo GTS": "#1f357e",
 };
 
 const DEFAULT_COLOR = "rgb(0, 98, 255)";
