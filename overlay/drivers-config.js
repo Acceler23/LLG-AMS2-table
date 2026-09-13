@@ -350,6 +350,8 @@ const CAR_LOGOS = {
   "MetalMoro AJR Gen2 Nissan": "nissan.png",
   //Oreca
   "Oreca": "oreca.png",
+  //Panoz
+  "Panoz": "panoz.png",
   //Peugeot
   "Peugeot": "peugeot.png",
   //Porsche
