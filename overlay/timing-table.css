@@ -146,6 +146,36 @@ html, body {
   font-weight: 700;
 }
 
+.row.finished {
+  background-image: repeating-conic-gradient(#0a2a4a 0% 25%, #1a4a7a 0% 50%);
+  background-size: 16px 16px;
+  background-color: #0e42a5;
+}
+
+.row.finished.player {
+  background-image: repeating-conic-gradient(#0050aa 0% 25%, #0070dd 0% 50%);
+  background-size: 16px 16px;
+}
+
+.pos-gain {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  padding: 0 4px;
+  font-size: 16px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.pos-gain.pos-up {
+  color: #3dff7a;
+}
+
+.pos-gain.pos-down {
+  color: #ff5a5a;
+}
+
 .right-value.pos-up {
   color: #3dff7a;
   font-weight: 700;

@@ -35,7 +35,7 @@ async function api(path, opts = {}) {
 function renderSeasons(seasons) {
   const sel = document.getElementById("rltSeason");
   const cur = sel.value;
-  sel.innerHTML = '<option value="">— seasons ativas —</option>';
+  sel.innerHTML = '<option value="">— só dados do jogo (sem season) —</option>';
   (seasons || []).forEach((s) => {
     const opt = document.createElement("option");
     opt.value = s.seasonId;
@@ -90,15 +90,26 @@ async function reloadSeasons() {
 
 async function applySeason() {
   const seasonId = document.getElementById("rltSeason").value;
-  if (!seasonId) return log("Selecione uma season");
   try {
+    if (!seasonId) {
+      log("Modo só jogo (sem season RLT)…");
+      const body = await api("/api/rlt/season", {
+        method: "POST",
+        body: JSON.stringify({ seasonId: null }),
+      });
+      renderClasses([]);
+      document.getElementById("rltStatus").textContent = JSON.stringify(body.status || {}, null, 0);
+      log("OK — overlay usa apenas dados do AMS2");
+      return;
+    }
     log(`Aplicando season ${seasonId}…`);
     const body = await api("/api/rlt/season", {
       method: "POST",
       body: JSON.stringify({ seasonId: Number(seasonId) }),
     });
     const p = body.payload || {};
-    log(`Season aplicada: ${p.seasonName} | classes=${(p.classes || []).length} | drivers=${Object.keys(p.drivers || {}).length}`);
+    const nDrivers = Array.isArray(p.drivers) ? p.drivers.length : Object.keys(p.drivers || {}).length;
+    log(`Season aplicada: ${p.seasonName} | classes=${(p.classes || []).length} | drivers=${nDrivers}`);
     renderClasses(p.classes || []);
     document.getElementById("rltStatus").textContent = JSON.stringify(body.status || {}, null, 0);
   } catch (e) {
@@ -110,7 +121,7 @@ async function clearRlt() {
   try {
     await api("/api/rlt/clear", { method: "POST", body: "{}" });
     document.getElementById("rltKey").value = "";
-    document.getElementById("rltSeason").innerHTML = '<option value="">— seasons ativas —</option>';
+    document.getElementById("rltSeason").innerHTML = '<option value="">— só dados do jogo (sem season) —</option>';
     document.getElementById("rltClasses").innerHTML = "";
     document.getElementById("rltStatus").textContent = "";
     log("RLT limpo");

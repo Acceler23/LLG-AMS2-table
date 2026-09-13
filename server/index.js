@@ -109,7 +109,11 @@ app.get("/api/rlt/seasons", async (req, res) => {
 app.post("/api/rlt/season", async (req, res) => {
   try {
     const seasonId = req.body && req.body.seasonId;
-    if (!seasonId) return res.status(400).json({ ok: false, error: "seasonId obrigatorio" });
+    if (seasonId == null || seasonId === "" || Number(seasonId) === 0) {
+      const payload = rlt.clearSeason();
+      broadcastRlt();
+      return res.json({ ok: true, payload, status: rlt.getStatus(), mode: "game-only" });
+    }
     const payload = await rlt.selectSeason(seasonId);
     broadcastRlt();
     res.json({ ok: true, payload, status: rlt.getStatus() });

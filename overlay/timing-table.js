@@ -24,10 +24,28 @@ function normalizeDriverName(name) {
     .replace(/\[[^\]]*\]/g, "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[|\/\\]+/g, " ")
+    .replace(/\./g, " ")
     .replace(/[^a-zA-Z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function nameCandidates(raw) {
+  const parts = String(raw || "")
+    .split(/[|\/\\]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!parts.length) parts.push(String(raw || ""));
+  const out = new Set();
+  parts.forEach((p) => {
+    const n = normalizeDriverName(p);
+    if (n) out.add(n);
+  });
+  const full = normalizeDriverName(raw);
+  if (full) out.add(full);
+  return Array.from(out);
 }
 
 function levenshtein(a, b) {
@@ -149,42 +167,45 @@ function rltLookup(entry) {
     return mapped;
   }
 
-  const target = normalizeDriverName(raw);
-  if (!target || target === "player") {
+  const candidates = nameCandidates(raw).filter((t) => t && t !== "player");
+  if (!candidates.length) {
     rltLookupCache.set(raw, null);
     return null;
   }
-  const targetTokens = target.split(" ").filter(Boolean);
-  const targetLast = targetTokens[targetTokens.length - 1] || "";
 
   let best = null;
   let bestScore = 0;
-  for (const d of rltConfig.drivers) {
-    for (const al of d.aliases || []) {
-      const score = scoreAlias(target, targetTokens, targetLast, al);
-      if (score > bestScore) {
-        bestScore = score;
-        best = d;
+  for (const target of candidates) {
+    const targetTokens = target.split(" ").filter(Boolean);
+    const targetLast = targetTokens[targetTokens.length - 1] || "";
+    for (const d of rltConfig.drivers) {
+      for (const al of d.aliases || []) {
+        const score = scoreAlias(target, targetTokens, targetLast, al);
+        if (score > bestScore) {
+          bestScore = score;
+          best = d;
+        }
+        if (score >= 1) break;
       }
-      if (score >= 1) break;
-    }
-    if (d.firstName) {
-      const fn = normalizeDriverName(`${d.firstName} ${d.lastName || ""}`);
-      const score = scoreAlias(target, targetTokens, targetLast, fn);
-      if (score > bestScore) {
-        bestScore = score;
-        best = d;
-      }
-    }
-    if (d.lastName) {
-      const ln = normalizeDriverName(d.lastName);
-      if (targetLast === ln && ln.length >= 3) {
-        const score = targetTokens.length === 1 ? 0.99 : 0.985;
+      if (d.firstName) {
+        const fn = normalizeDriverName(`${d.firstName} ${d.lastName || ""}`);
+        const score = scoreAlias(target, targetTokens, targetLast, fn);
         if (score > bestScore) {
           bestScore = score;
           best = d;
         }
       }
+      if (d.lastName) {
+        const ln = normalizeDriverName(d.lastName);
+        if (targetLast === ln && ln.length >= 3) {
+          const score = targetTokens.length === 1 ? 0.99 : 0.985;
+          if (score > bestScore) {
+            bestScore = score;
+            best = d;
+          }
+        }
+      }
+      if (bestScore >= 1) break;
     }
     if (bestScore >= 1) break;
   }
@@ -747,6 +768,8 @@ function carLogo(carName) {
   return CAR_LOGOS[manufacturerName(carName)] || CAR_LOGOS[carName];
 }
 
+const frozenGaps = new Map(); // name|mode -> { text, cls }
+
 function formatLeaderGap(entry, leaderDistance, bestFastestMs) {
   if (!isRaceSession()) {
     return formatQualGap(entry, bestFastestMs, true);
@@ -771,6 +794,12 @@ function rightColumnValue(entry, change, carAheadDistance, bestFastestMs, leader
   }
 
   const mode = RIGHT_COLUMN_MODES[rightColumnIndex];
+  const freezeKey = `${entry.name}|${mode}`;
+  if (isRaceSession() && entry.raceState === 3 && (mode === "Intervalo" || mode === "Gap líder")) {
+    const frozen = frozenGaps.get(freezeKey);
+    if (frozen) return { text: frozen.text, cls: frozen.cls || "" };
+  }
+
   let result;
   if (mode === "Intervalo") {
     result = formatGap(entry, carAheadDistance, change, bestFastestMs, aheadFastestMs);
@@ -794,6 +823,14 @@ function rightColumnValue(entry, change, carAheadDistance, bestFastestMs, leader
 
   if (pit && pit.phase === "done") {
     result.pitPhase = "done";
+  }
+  if (isRaceSession() && entry.raceState === 3 && (mode === "Intervalo" || mode === "Gap líder")) {
+    if (result && result.text && result.text !== "-" && !frozenGaps.has(freezeKey)) {
+      frozenGaps.set(freezeKey, { text: result.text, cls: result.cls || "" });
+    }
+  } else if (entry.raceState !== 3) {
+    frozenGaps.delete(`${entry.name}|Intervalo`);
+    frozenGaps.delete(`${entry.name}|Gap líder`);
   }
   return result;
 }
@@ -1443,6 +1480,7 @@ function renderStandings(standings) {
       isAssisted = rowKeys.some((k) => k && meKeys.has(k));
     }
     el.classList.toggle("player", isAssisted);
+    el.classList.remove("fastest", "finished", "dnf", "yellow-flag");
     el.style.backgroundColor = isAssisted ? "#006bdd" : "#0e42a5";
     const posEl = el.querySelector(".pos");
     posEl.textContent = String(pos || "—");
@@ -1465,12 +1503,12 @@ function renderStandings(standings) {
       cls = delta.cls || "";
     } else if (colMode === "Pts proj.") {
       if (!inRace) {
-        text = "—";
+        text = String(safeTotal);
         cls = "";
       } else {
         const deltaRank = Number(rankDelta.get(row)) || 0;
         const rd = formatPosDelta(deltaRank);
-        text = "+" + String(addPts) + (rd.text !== "=" ? " " + rd.text : "");
+        text = `${safeTotal}(+${addPts})${rd.text !== "=" ? rd.text : ""}`;
         cls = rd.cls || "";
       }
     } else if (colMode === "Gap líder") {
@@ -1715,14 +1753,24 @@ function render(standings) {
 
     const logoFile = carLogo(entry.carName);
     const logoImg = el.querySelector(".logo");
-    if (logoFile) {
-      logoImg.src = `assets/logos/${logoFile}`;
-      logoImg.style.display = "";
-    } else {
-      logoImg.style.display = "none";
+    if (logoImg) {
+      if (logoFile) {
+        logoImg.src = `assets/logos/${logoFile}`;
+        logoImg.style.display = "";
+      } else {
+        logoImg.style.display = "none";
+      }
+    }
+    const gainEl = el.querySelector(".pos-gain");
+    if (gainEl) {
+      gainEl.style.display = "none";
+      gainEl.textContent = "";
     }
 
     const change = positionChange(entry, item.displayPosition, isClassMode, standings);
+    const finished = entry.raceState === 3;
+    el.classList.toggle("finished", !!finished && isRaceSession());
+
     const gapRef = (typeof entry._aheadDistance === "number") ? entry._aheadDistance : prevDistance;
     posEl.textContent = item.displayPosition;
     el.querySelector(".name-text").textContent = rltDisplayName(entry);

@@ -70,6 +70,8 @@ function normalizeName(name) {
     .replace(/\[[^\]]*\]/g, "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[|\/\\]+/g, " ")
+    .replace(/\./g, " ")
     .replace(/[^a-zA-Z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -184,7 +186,15 @@ function buildDrivers(standingsData, classes) {
         .split(/[,;|/\n]+/)
         .map((s) => s.trim())
         .filter(Boolean)
-        .forEach((s) => pushAlias(aliases, s));
+        .forEach((s) => {
+          pushAlias(aliases, s);
+          // R.Merlugo|E.C.H.O → partes e sem pontos
+          String(s)
+            .split(/[|\/\\]+/)
+            .map((p) => p.trim())
+            .filter(Boolean)
+            .forEach((p) => pushAlias(aliases, p));
+        });
     }
     pushAlias(aliases, d.driverName);
     pushAlias(aliases, di.uniqueName);
@@ -310,7 +320,22 @@ function buildStandingsRows(standingsData, classes) {
   });
 }
 
+function clearSeason() {
+  selectedSeasonId = null;
+  cache.seasonDetail = null;
+  cache.standings = null;
+  cache.classes = [];
+  cache.drivers = [];
+  cache.standingsRows = [];
+  stopRefresh();
+  if (hasKey()) startRefresh();
+  return null;
+}
+
 async function selectSeason(seasonId) {
+  if (seasonId == null || seasonId === "" || Number(seasonId) === 0) {
+    return clearSeason();
+  }
   selectedSeasonId = Number(seasonId);
   const detail = await fetchSeasonDetail(selectedSeasonId);
   const season = detail && detail.season;
@@ -400,6 +425,7 @@ module.exports = {
   fetchLeague,
   fetchSeasons,
   selectSeason,
+  clearSeason,
   refresh,
   startRefresh,
   stopRefresh,
