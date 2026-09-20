@@ -14,6 +14,13 @@ function send(name, payload = {}) {
   }
 }
 
+function setOpacity(target, value) {
+  const v = Math.max(0, Math.min(100, Number(value) || 0));
+  const el = document.getElementById(target === "table" ? "opTableVal" : "opRowsVal");
+  if (el) el.textContent = v + "%";
+  send("overlay.setOpacity", { target, value: v / 100 });
+}
+
 function log(msg) {
   const el = document.getElementById("rltLog");
   if (!el) return;
@@ -88,6 +95,43 @@ async function reloadSeasons() {
   }
 }
 
+function renderTeamLogos(rows) {
+  const box = document.getElementById("teamLogos");
+  if (!box) return;
+  const teams = [];
+  const seen = new Set();
+  (rows || []).forEach((r) => {
+    const t = r.teamName;
+    if (!t || seen.has(t)) return;
+    seen.add(t);
+    teams.push(t);
+  });
+  teams.sort((a, b) => a.localeCompare(b));
+  if (!teams.length) {
+    box.innerHTML = '<span class="muted">Nenhuma equipe na season</span>';
+    return;
+  }
+  box.innerHTML = teams
+    .map((t) => {
+      const id = "tl_" + btoa(unescape(encodeURIComponent(t))).replace(/[^a-zA-Z0-9]/g, "");
+      return `<div class="row" style="margin:4px 0">
+        <span class="muted" style="min-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t}">${t}</span>
+        <input id="${id}" type="text" placeholder="arquivo.png (vazio=padrão)" data-team="${t.replace(/"/g, "&quot;")}" />
+        <button onclick="saveTeamLogo('${id}')">OK</button>
+      </div>`;
+    })
+    .join("");
+}
+
+function saveTeamLogo(inputId) {
+  const el = document.getElementById(inputId);
+  if (!el) return;
+  const teamName = el.getAttribute("data-team");
+  const file = (el.value || "").trim() || null;
+  send("overlay.setTeamLogo", { teamName, file });
+  log(file ? `Logo ${teamName} → ${file}` : `Logo ${teamName} → padrão`);
+}
+
 async function applySeason() {
   const seasonId = document.getElementById("rltSeason").value;
   try {
@@ -98,6 +142,7 @@ async function applySeason() {
         body: JSON.stringify({ seasonId: null }),
       });
       renderClasses([]);
+      renderTeamLogos([]);
       document.getElementById("rltStatus").textContent = JSON.stringify(body.status || {}, null, 0);
       log("OK — overlay usa apenas dados do AMS2");
       return;
@@ -111,6 +156,7 @@ async function applySeason() {
     const nDrivers = Array.isArray(p.drivers) ? p.drivers.length : Object.keys(p.drivers || {}).length;
     log(`Season aplicada: ${p.seasonName} | classes=${(p.classes || []).length} | drivers=${nDrivers}`);
     renderClasses(p.classes || []);
+    renderTeamLogos(p.standingsRows || []);
     document.getElementById("rltStatus").textContent = JSON.stringify(body.status || {}, null, 0);
   } catch (e) {
     log("ERRO season: " + e.message);
@@ -124,6 +170,7 @@ async function clearRlt() {
     document.getElementById("rltSeason").innerHTML = '<option value="">— só dados do jogo (sem season) —</option>';
     document.getElementById("rltClasses").innerHTML = "";
     document.getElementById("rltStatus").textContent = "";
+    renderTeamLogos([]);
     log("RLT limpo");
   } catch (e) {
     log("ERRO clear: " + e.message);

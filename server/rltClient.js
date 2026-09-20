@@ -224,6 +224,7 @@ function buildDrivers(standingsData, classes) {
       lastName,
       displayName: displayFull,
       description: description || null,
+      teamName: d.teamName || di.teamName || null,
       aliases: Array.from(aliases),
     });
   });

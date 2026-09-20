@@ -26,6 +26,19 @@
   <button onclick="send('overlay.nextColumn')">Coluna → .</button>
   <button onclick="send('overlay.toggleHighlight')">Destaque (p)</button>
 
+  <div class="box">
+    <div class="row">
+      <label class="muted" style="min-width:140px">Opacidade tabela</label>
+      <input id="opTable" type="range" min="0" max="100" value="100" oninput="setOpacity('table', this.value)" />
+      <span id="opTableVal" class="muted" style="min-width:36px">100%</span>
+    </div>
+    <div class="row">
+      <label class="muted" style="min-width:140px">Opacidade itens</label>
+      <input id="opRows" type="range" min="0" max="100" value="100" oninput="setOpacity('rows', this.value)" />
+      <span id="opRowsVal" class="muted" style="min-width:36px">100%</span>
+    </div>
+  </div>
+
   <h3>Racing League Tools</h3>
   <div class="box">
     <div class="muted">API key (header X-API-Key) — <a href="https://racingleaguetools.com/api/docs/" target="_blank" style="color:#6cf">docs</a></div>
@@ -42,6 +55,9 @@
     <div id="rltClasses"></div>
     <div class="muted" id="rltStatus"></div>
     <div id="rltLog"></div>
+    <h3 style="margin-top:16px">Logos de equipe</h3>
+    <div class="muted">Arquivo em overlay/assets/teams/ (ex: minha_equipe.png). Vazio = padrão (slug). Fallback: logo do carro.</div>
+    <div id="teamLogos"></div>
   </div>
 
   <h3>OBS</h3>

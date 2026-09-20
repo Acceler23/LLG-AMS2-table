@@ -383,3 +383,9 @@ const CAR_LOGOS = {
   "Volvo": "volvo.png",
   "Vulkan": "volvo.png",
 };
+
+// Override de logo de equipe: nome da equipe (como vem da API) → arquivo em assets/teams/
+// Ex: "Minha Equipe": "minha_equipe.png"
+const TEAM_LOGO_OVERRIDES = {
+  "E.C.H.O": "echo.png"
+};

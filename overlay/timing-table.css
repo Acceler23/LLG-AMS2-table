@@ -7,10 +7,12 @@ html, body {
 }
 
 #timing-table {
+  --table-opacity: 1;
+  --row-opacity: 1;
   position: absolute;
   width: 460px;
   max-height: 1080px;
-  background-color: #0e3a66;
+  background-color: rgba(14, 58, 102, var(--table-opacity));
   overflow: hidden;
   border-radius: 10px 0 0 10px;
   border-top: 2px solid #00c5fd;
@@ -22,7 +24,7 @@ html, body {
 
 #timing-table .title-bar,
 #timing-table .header {
-  background-color: #0e3a66;
+  background-color: #0a2d52;
   border-radius: 0;
 }
 
@@ -34,16 +36,16 @@ html, body {
 }
 
 #timing-table.sc-out {
-  background-color: #e6b800;
+  background-color: rgba(230, 184, 0, var(--table-opacity));
 }
 
 #timing-table.sc-out .title-bar,
 #timing-table.sc-out .header {
-  background-color: #e6b800;
+  background-color: #c49a00;
 }
 
 .title-bar {
-  background-color: #0e3a66;
+  background-color: #0a2d52;
   padding: 8px 16px;
   display: flex;
   justify-content: space-between;
@@ -83,6 +85,7 @@ html, body {
   font-weight: 700;
   color: #fff;
   letter-spacing: 0.5px;
+  background-color: #0a2d52;
 }
 
 .header .pos {
@@ -108,8 +111,8 @@ html, body {
 }
 
 .row-spacer {
-  min-height: 44px;
-  height: 44px;
+  min-height: 40px;
+  height: 40px;
   visibility: hidden;
   pointer-events: none;
   margin-left: 5px;
@@ -119,9 +122,9 @@ html, body {
   display: grid;
   grid-template-columns: 50px 1fr 100px;
   align-items: stretch;
-  min-height: 44px;
+  min-height: 40px;
   font-size: 20px;
-  background-color: #0e42a5;
+  background-color: rgba(14, 66, 165, var(--row-opacity));
   border-top: 3px solid #3a5a8c;
   border-radius: 0 0 0 10px;
   overflow: hidden;
@@ -129,12 +132,12 @@ html, body {
 }
 
 .row.player {
-  background-color: #006bdd;
+  background-color: rgba(0, 107, 221, var(--row-opacity));
   font-weight: 700;
 }
 
 .row.yellow-flag {
-  background-color: #c9a000 !important;
+  background-color: rgba(201, 160, 0, var(--row-opacity)) !important;
 }
 
 .row.dnf {
@@ -149,12 +152,13 @@ html, body {
 .row.finished {
   background-image: repeating-conic-gradient(#0a2a4a 0% 25%, #1a4a7a 0% 50%);
   background-size: 16px 16px;
-  background-color: #0e42a5;
+  background-color: rgba(14, 66, 165, var(--row-opacity));
 }
 
 .row.finished.player {
   background-image: repeating-conic-gradient(#0050aa 0% 25%, #0070dd 0% 50%);
   background-size: 16px 16px;
+  background-color: rgba(0, 107, 221, var(--row-opacity));
 }
 
 .pos-gain {
@@ -300,11 +304,15 @@ html, body {
   padding-right: 16px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .row.fastest .right-value,
 .right-value.fastest-gap {
-  color: #d24bff;
+  color: #8c0eb6;
   font-weight: 700;
 }
 
