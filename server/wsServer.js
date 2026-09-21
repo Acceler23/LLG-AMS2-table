@@ -12,9 +12,14 @@ function createWsServer(httpServer) {
   const clients = new Set();
   const commandHandlers = new Map(); // registrado por outros modulos (ex: obsController)
 
+  let onConnectHook = null;
+
   wss.on("connection", (socket) => {
     clients.add(socket);
     console.log(`Cliente conectado (${clients.size} ativos)`);
+    if (typeof onConnectHook === "function") {
+      try { onConnectHook(socket); } catch (e) { console.warn("onConnectHook", e.message); }
+    }
 
     socket.on("message", (raw) => {
       let msg;
@@ -60,6 +65,9 @@ function createWsServer(httpServer) {
     // vindos da overlay/painel sem acoplar tudo neste arquivo.
     onCommand(name, handler) {
       commandHandlers.set(name, handler);
+    },
+    onConnect(handler) {
+      onConnectHook = handler;
     },
   };
 }

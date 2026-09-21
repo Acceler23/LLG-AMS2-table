@@ -244,6 +244,10 @@ const CLASS_COLORS = {
   "Volkswagen Virtus GTS": "#640909",
   "Volkswagen Polo": "#1c6199",
   "Volkswagen Polo GTS": "#1f357e",
+
+  //Driver Class
+  "Amador": "#bd0000",
+  "Pro": "#009200",
 };
 
 const DEFAULT_COLOR = "rgb(0, 98, 255)";
@@ -346,6 +350,8 @@ const CAR_LOGOS = {
   "MetalMoro AJR Gen2 Nissan": "nissan.png",
   //Oreca
   "Oreca": "oreca.png",
+  //Panoz
+  "Panoz": "panoz.png",
   //Peugeot
   "Peugeot": "peugeot.png",
   //Porsche
@@ -376,4 +382,10 @@ const CAR_LOGOS = {
   //volvo
   "Volvo": "volvo.png",
   "Vulkan": "volvo.png",
+};
+
+// Override de logo de equipe: nome da equipe (como vem da API) → arquivo em assets/teams/
+// Ex: "Minha Equipe": "minha_equipe.png"
+const TEAM_LOGO_OVERRIDES = {
+  "E.C.H.O": "echo.png"
 };

@@ -16,6 +16,227 @@ const SPLIT_BY_CAR_CLASSES = new Set([
   "TSICup",
 ]);
 
+let rltConfig = null;
+const RLT_MATCH_MIN = 0.98;
+
+function rowBg(hex) {
+  const root = document.getElementById("timing-table");
+  const op = root ? parseFloat(getComputedStyle(root).getPropertyValue("--row-opacity")) || 1 : 1;
+  const h = String(hex || "#0e42a5").replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const n = parseInt(full, 16);
+  if (Number.isNaN(n)) return `rgba(14,66,165,${op})`;
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return `rgba(${r},${g},${b},${op})`;
+}
+
+function normalizeDriverName(name) {
+  return String(name || "")
+    .replace(/\[[^\]]*\]/g, "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[|\/\\]+/g, " ")
+    .replace(/\./g, " ")
+    .replace(/[^a-zA-Z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function nameCandidates(raw) {
+  const parts = String(raw || "")
+    .split(/[|\/\\]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!parts.length) parts.push(String(raw || ""));
+  const out = new Set();
+  parts.forEach((p) => {
+    const n = normalizeDriverName(p);
+    if (n) out.add(n);
+  });
+  const full = normalizeDriverName(raw);
+  if (full) out.add(full);
+  return Array.from(out);
+}
+
+function levenshtein(a, b) {
+  const m = a.length;
+  const n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + cost);
+      prev = tmp;
+    }
+  }
+  return dp[n];
+}
+
+function nameSimilarity(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const maxLen = Math.max(a.length, b.length);
+  if (!maxLen) return 0;
+  return 1 - levenshtein(a, b) / maxLen;
+}
+
+const rltLookupCache = new Map();
+
+function tokenJaccard(aTokens, bTokens) {
+  if (!aTokens.length || !bTokens.length) return 0;
+  const A = new Set(aTokens);
+  const B = new Set(bTokens);
+  let inter = 0;
+  A.forEach((t) => {
+    if (B.has(t)) inter += 1;
+  });
+  return inter / (A.size + B.size - inter);
+}
+
+function scoreAlias(target, targetTokens, targetLast, al) {
+  if (!al) return 0;
+  let score = nameSimilarity(target, al);
+  if (score >= RLT_MATCH_MIN) return score;
+
+  const alTokens = al.split(" ").filter(Boolean);
+  const alLast = alTokens[alTokens.length - 1] || "";
+  const alFirst = alTokens[0] || "";
+
+  score = Math.max(score, tokenJaccard(targetTokens, alTokens));
+
+  if (targetLast && alLast && targetLast === alLast && targetLast.length >= 3) {
+    score = Math.max(score, 0.99);
+    if (targetTokens.length >= 2) {
+      const t0 = targetTokens[0].replace(/\./g, "");
+      if (t0.length === 1 && alFirst.startsWith(t0)) score = Math.max(score, 0.995);
+    }
+  }
+
+  if (targetTokens.length === 1) {
+    const tok = targetTokens[0];
+    if (tok.length >= 3) {
+      for (const t of alTokens) {
+        if (t === tok) score = Math.max(score, 1);
+        else {
+          const sim = nameSimilarity(tok, t);
+          if (sim >= 0.9) score = Math.max(score, sim);
+          if (t.startsWith(tok) || tok.startsWith(t)) {
+            const ratio = Math.min(t.length, tok.length) / Math.max(t.length, tok.length);
+            if (ratio >= 0.8) score = Math.max(score, ratio);
+          }
+        }
+      }
+      if (al === tok) score = 1;
+      if (al.includes(tok) && tok.length >= 4) score = Math.max(score, 0.98);
+    }
+  }
+
+  if (target.includes(al) || al.includes(target)) {
+    const ratio = Math.min(target.length, al.length) / Math.max(target.length, al.length);
+    if (ratio >= 0.75) score = Math.max(score, Math.max(ratio, 0.9));
+  }
+
+  if (targetTokens.length === 2 && targetTokens[0].replace(/\./g, "").length === 1 && alTokens.length >= 2) {
+    const ini = targetTokens[0].replace(/\./g, "");
+    if (alFirst.startsWith(ini) && targetLast === alLast) score = Math.max(score, 0.995);
+  }
+
+  return score;
+}
+
+function rltLookupByMap(raw) {
+  if (typeof RLT_INGAME_MAP === "undefined" || !RLT_INGAME_MAP) return null;
+  const key = Object.keys(RLT_INGAME_MAP).find(
+    (k) => normalizeDriverName(k) === normalizeDriverName(raw)
+  );
+  if (!key) return null;
+  const want = normalizeDriverName(RLT_INGAME_MAP[key]);
+  if (!rltConfig || !Array.isArray(rltConfig.drivers)) return null;
+  for (const d of rltConfig.drivers) {
+    if (normalizeDriverName(d.displayName) === want) return d;
+    if (normalizeDriverName(`${d.firstName || ""} ${d.lastName || ""}`) === want) return d;
+    if ((d.aliases || []).some((a) => a === want)) return d;
+  }
+  return null;
+}
+
+function rltLookup(entry) {
+  if (!rltConfig || !Array.isArray(rltConfig.drivers) || !rltConfig.drivers.length) return null;
+  const raw = entry.name || "";
+  if (rltLookupCache.has(raw)) return rltLookupCache.get(raw);
+
+  const mapped = rltLookupByMap(raw);
+  if (mapped) {
+    rltLookupCache.set(raw, mapped);
+    return mapped;
+  }
+
+  const candidates = nameCandidates(raw).filter((t) => t && t !== "player");
+  if (!candidates.length) {
+    rltLookupCache.set(raw, null);
+    return null;
+  }
+
+  let best = null;
+  let bestScore = 0;
+  for (const target of candidates) {
+    const targetTokens = target.split(" ").filter(Boolean);
+    const targetLast = targetTokens[targetTokens.length - 1] || "";
+    for (const d of rltConfig.drivers) {
+      for (const al of d.aliases || []) {
+        const score = scoreAlias(target, targetTokens, targetLast, al);
+        if (score > bestScore) {
+          bestScore = score;
+          best = d;
+        }
+        if (score >= 1) break;
+      }
+      if (d.firstName) {
+        const fn = normalizeDriverName(`${d.firstName} ${d.lastName || ""}`);
+        const score = scoreAlias(target, targetTokens, targetLast, fn);
+        if (score > bestScore) {
+          bestScore = score;
+          best = d;
+        }
+      }
+      if (d.lastName) {
+        const ln = normalizeDriverName(d.lastName);
+        if (targetLast === ln && ln.length >= 3) {
+          const score = targetTokens.length === 1 ? 0.99 : 0.985;
+          if (score > bestScore) {
+            bestScore = score;
+            best = d;
+          }
+        }
+      }
+      if (bestScore >= 1) break;
+    }
+    if (bestScore >= 1) break;
+  }
+  const hit = best && bestScore >= RLT_MATCH_MIN ? best : null;
+  rltLookupCache.set(raw, hit);
+  return hit;
+}
+
+function rltDisplayName(entry) {
+  const info = rltLookup(entry);
+  if (!info) return entry.name;
+  if (info.firstName && info.lastName) return `${info.firstName} ${info.lastName}`.trim();
+  if (info.displayName) return info.displayName;
+  return entry.name;
+}
+
+function rltEnabled() {
+  return !!(rltConfig && rltConfig.classes && rltConfig.classes.length > 0);
+}
+
 function countClasses(standings) {
   const set = new Set();
   (standings || []).forEach((e) => {
@@ -33,17 +254,34 @@ function countCars(standings) {
 }
 
 function isSplitByCarSession(standings) {
+  if (rltEnabled()) return false;
   if (countClasses(standings) !== 1) return false;
   const cls = (standings.find((e) => e.carClass) || {}).carClass;
   return !!(cls && SPLIT_BY_CAR_CLASSES.has(cls));
 }
 
 function groupKey(entry, standings) {
+  if (rltEnabled()) {
+    const info = rltLookup(entry);
+    if (info) return info.uniqueName || info.name;
+    return "—";
+  }
   if (isSplitByCarSession(standings)) return entry.carName || "—";
   return entry.carClass || "—";
 }
 
+function groupLabel(key) {
+  if (rltEnabled() && rltConfig.classes) {
+    const c = rltConfig.classes.find((x) => x.uniqueName === key || x.name === key);
+    if (c) return c.name || c.uniqueName;
+  }
+  return key;
+}
+
 function activePageModes(standings) {
+  if (rltEnabled()) {
+    return rltConfig.classes.length > 1 ? PAGE_MODES_ALL : ["Geral"];
+  }
   if (isSplitByCarSession(standings)) {
     return countCars(standings) > 1 ? PAGE_MODES_ALL : ["Geral"];
   }
@@ -262,6 +500,38 @@ function isObserver(entry) {
   return false;
 }
 
+const sessionDriverCache = new Map();
+
+function mergeDisconnectedDrivers(standings) {
+  if (!isRaceSession()) {
+    sessionDriverCache.clear();
+    return standings;
+  }
+  const present = new Set();
+  (standings || []).forEach((e) => {
+    if (!e || !e.name) return;
+    present.add(e.name);
+    if (e.name !== "Player" && (e.lapsCompleted > 0 || e.currentLap > 1 || e.position > 0)) {
+      sessionDriverCache.set(e.name, Object.assign({}, e));
+    }
+  });
+  const merged = (standings || []).slice();
+  sessionDriverCache.forEach((cached, name) => {
+    if (present.has(name)) return;
+    if (!(cached.lapsCompleted > 0 || cached.currentLap > 1)) return;
+    merged.push(
+      Object.assign({}, cached, {
+        inRace: false,
+        raceState: 5,
+        speedMs: 0,
+        disconnected: true,
+      })
+    );
+  });
+  merged.sort((a, b) => (a.position || 999) - (b.position || 999));
+  return merged;
+}
+
 function connect() {
   const socket = new WebSocket(WS_URL);
   socket.addEventListener("message", (event) => {
@@ -270,7 +540,8 @@ function connect() {
       const payload = msg.data;
       const raw = Array.isArray(payload) ? payload : payload.standings || [];
       const session = Array.isArray(payload) ? null : payload.session;
-      const standings = raw.filter((e) => !isSafetyCar(e) && !isObserver(e));
+      let standings = raw.filter((e) => !isSafetyCar(e) && !isObserver(e));
+      standings = mergeDisconnectedDrivers(standings);
       updateStablePlayer(standings);
       standings.forEach((e) => {
         e.isPlayer = isStablePlayer(e);
@@ -287,34 +558,63 @@ function connect() {
           raceStartAt = Date.now();
           pitStats.clear();
           pitTimers.clear();
+          sessionDriverCache.clear();
+          frozenGaps.clear();
         } else if (latestSessionState !== 5 && prevState === 5) {
           raceStartAt = null;
+          sessionDriverCache.clear();
         }
       }
       updateSessionHeader(session);
       render(latestStandings);
     } else if (msg.type === "overlayCommand") {
-      applyOverlayCommand(msg.name);
+      applyOverlayCommand(msg.name, msg.payload || {});
+    } else if (msg.type === "rltConfig") {
+      rltConfig = msg.data || null;
+      rltLookupCache.clear();
+      if (latestStandings.length) render(latestStandings);
     }
   });
   socket.addEventListener("close", () => setTimeout(connect, 2000));
 }
 
-function applyOverlayCommand(name) {
+function applyOverlayCommand(name, payload = {}) {
   if (name === "overlay.prevColumn") {
-    rightColumnIndex = (rightColumnIndex - 1 + RIGHT_COLUMN_MODES.length) % RIGHT_COLUMN_MODES.length;
+    if (standingsView) {
+      standingsColumnIndex = (standingsColumnIndex - 1 + STANDINGS_COLUMN_MODES.length) % STANDINGS_COLUMN_MODES.length;
+    } else {
+      rightColumnIndex = (rightColumnIndex - 1 + RIGHT_COLUMN_MODES.length) % RIGHT_COLUMN_MODES.length;
+    }
   } else if (name === "overlay.nextColumn") {
-    rightColumnIndex = (rightColumnIndex + 1) % RIGHT_COLUMN_MODES.length;
+    if (standingsView) {
+      standingsColumnIndex = (standingsColumnIndex + 1) % STANDINGS_COLUMN_MODES.length;
+    } else {
+      rightColumnIndex = (rightColumnIndex + 1) % RIGHT_COLUMN_MODES.length;
+    }
   } else if (name === "overlay.prevPage") {
     const modes = activePageModes(latestStandings);
     if (modes.length <= 1) return;
-    pageIndex = (pageIndex - 1 + modes.length) % modes.length;
+    pageIndex = ((Number(pageIndex) || 0) % modes.length + modes.length - 1) % modes.length;
   } else if (name === "overlay.nextPage") {
     const modes = activePageModes(latestStandings);
     if (modes.length <= 1) return;
-    pageIndex = (pageIndex + 1) % modes.length;
+    pageIndex = ((Number(pageIndex) || 0) % modes.length + 1) % modes.length;
   } else if (name === "overlay.toggleHighlight") {
     playerHighlightEnabled = !playerHighlightEnabled;
+  } else if (name === "overlay.toggleStandings") {
+    standingsView = !standingsView;
+  } else if (name === "overlay.setOpacity") {
+    const root = document.getElementById("timing-table");
+    if (!root) return;
+    const v = Math.max(0, Math.min(1, Number(payload.value)));
+    if (payload.target === "table") {
+      root.style.setProperty("--table-opacity", String(v));
+    } else if (payload.target === "rows") {
+      root.style.setProperty("--row-opacity", String(v));
+    }
+    return;
+  } else if (name === "overlay.setTeamLogo") {
+    setTeamLogoOverride(payload.teamName, payload.file || null);
   } else {
     return;
   }
@@ -389,7 +689,25 @@ function hashColor(str) {
   return `hsl(${hue}, 65%, 42%)`;
 }
 
+function normalizeColor(c) {
+  if (!c) return null;
+  let s = String(c).trim();
+  if (!s) return null;
+  if (s.startsWith("rgb") || s.startsWith("hsl")) return s;
+  if (s.startsWith("#")) s = s.slice(1);
+  // AARRGGBB (RLT/WPF) → #RRGGBB
+  if (/^[0-9a-fA-F]{8}$/.test(s)) return `#${s.slice(2, 8)}`;
+  if (/^[0-9a-fA-F]{6}$/.test(s)) return `#${s}`;
+  if (/^[0-9a-fA-F]{3}$/.test(s)) return `#${s}`;
+  return c;
+}
+
 function classColor(carClass) {
+  if (rltEnabled() && rltConfig.classes) {
+    const c = rltConfig.classes.find((x) => x.uniqueName === carClass || x.name === carClass);
+    const col = c && normalizeColor(c.color);
+    if (col) return col;
+  }
   if (typeof CLASS_COLORS === "undefined") return DEFAULT_COLOR;
   if (carClass && CLASS_COLORS[carClass]) return CLASS_COLORS[carClass];
   const formatted = formatClassName(carClass);
@@ -410,11 +728,11 @@ function classColor(carClass) {
 function contrastText(bg) {
   if (!bg) return "#fff";
   const s = String(bg).trim();
-  // hsl(h, s%, l%) — usa lightness
   const hsl = s.match(/hsl\(\s*[\d.]+\s*,\s*[\d.]+%\s*,\s*([\d.]+)%\s*\)/i);
   if (hsl) return Number(hsl[1]) > 55 ? "#000" : "#fff";
   let hex = s.replace("#", "");
   if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
+  if (hex.length === 8) hex = hex.slice(0, 6);
   if (hex.length !== 6) return "#fff";
   const r = parseInt(hex.slice(0, 2), 16) / 255;
   const g = parseInt(hex.slice(2, 4), 16) / 255;
@@ -497,10 +815,6 @@ function getStablePlayerClass(standings) {
 }
 
 function manufacturerName(carName) {
-  // pega so' a primeira palavra do nome do carro como nome da montadora.
-  // funciona bem pra "Ferrari 488 GT3", "McLaren 570S GT4" etc; para
-  // montadoras com nome composto (ex: "Aston Martin"), ajuste manualmente
-  // em CAR_LOGOS usando o carName completo como chave, se preferir.
   return (carName || "").split(" ")[0];
 }
 
@@ -508,6 +822,121 @@ function carLogo(carName) {
   if (typeof CAR_LOGOS === "undefined") return undefined;
   return CAR_LOGOS[manufacturerName(carName)] || CAR_LOGOS[carName];
 }
+
+function teamSlug(name) {
+  return String(name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "");
+}
+
+const teamLogoFailCache = new Set();
+
+function teamLogoFile(teamName) {
+  if (!teamName) return null;
+  if (teamLogoOverrides && teamLogoOverrides[teamName]) return teamLogoOverrides[teamName];
+  if (typeof TEAM_LOGO_OVERRIDES !== "undefined" && TEAM_LOGO_OVERRIDES && TEAM_LOGO_OVERRIDES[teamName]) {
+    return TEAM_LOGO_OVERRIDES[teamName];
+  }
+  const slug = teamSlug(teamName);
+  if (!slug) return null;
+  return slug + ".png";
+}
+
+function carLogoFromTeam(teamName) {
+  if (!teamName || typeof CAR_LOGOS === "undefined") return null;
+  if (CAR_LOGOS[teamName]) return CAR_LOGOS[teamName];
+  const first = manufacturerName(teamName);
+  if (CAR_LOGOS[first]) return CAR_LOGOS[first];
+  const slug = teamSlug(teamName);
+  for (const key of Object.keys(CAR_LOGOS)) {
+    if (teamSlug(key) === slug) return CAR_LOGOS[key];
+  }
+  return null;
+}
+
+function resolveLogoSrc(teamName, carName) {
+  const carFile = carLogo(carName) || carLogoFromTeam(teamName);
+  const teamFile = teamLogoFile(teamName);
+  const teamSrc = teamFile ? `assets/teams/${teamFile}` : null;
+  const carSrc = carFile ? `assets/cars/${carFile}` : null;
+
+  if (teamSrc && !teamLogoFailCache.has(teamSrc)) {
+    return { src: teamSrc, fallback: carSrc };
+  }
+  if (carSrc) return { src: carSrc, fallback: null };
+  return null;
+}
+
+function applyLogo(img, teamName, carName) {
+  if (!img) return;
+  const res = resolveLogoSrc(teamName, carName);
+  if (!res) {
+    img.style.display = "none";
+    img.removeAttribute("src");
+    img.onload = null;
+    img.onerror = null;
+    return;
+  }
+  if (img.dataset.logoSrc === res.src && img.style.display !== "none") return;
+
+  img.style.display = "none";
+  img.onload = () => {
+    img.style.display = "";
+    img.dataset.logoSrc = res.src;
+  };
+  img.onerror = () => {
+    if (res.src && res.src.indexOf("/teams/") !== -1) teamLogoFailCache.add(res.src);
+    if (res.fallback && img.dataset.logoTried !== res.fallback) {
+      img.dataset.logoTried = res.fallback;
+      img.src = res.fallback;
+      return;
+    }
+    img.style.display = "none";
+    img.removeAttribute("src");
+    img.dataset.logoSrc = "";
+    img.onload = null;
+    img.onerror = null;
+  };
+  img.dataset.logoTried = res.src;
+  img.src = res.src;
+}
+
+let teamLogoOverrides = {};
+try {
+  const saved = localStorage.getItem("teamLogoOverrides");
+  if (saved) teamLogoOverrides = JSON.parse(saved) || {};
+} catch (_) {}
+
+function setTeamLogoOverride(teamName, file) {
+  if (!teamName) return;
+  if (file) teamLogoOverrides[teamName] = file;
+  else delete teamLogoOverrides[teamName];
+  try {
+    localStorage.setItem("teamLogoOverrides", JSON.stringify(teamLogoOverrides));
+  } catch (_) {}
+}
+
+function rltTeamName(entry) {
+  const info = rltLookup(entry);
+  if (info && info.teamName) return info.teamName;
+  if (rltConfig && Array.isArray(rltConfig.standingsRows)) {
+    const keys = nameCandidates(entry.name || "").filter(Boolean);
+    for (const row of rltConfig.standingsRows) {
+      const rowKeys = [
+        normalizeDriverName(row.displayName),
+        normalizeDriverName(row.driverName),
+        ...(row.aliases || []),
+      ].filter(Boolean);
+      if (keys.some((k) => rowKeys.includes(k)) && row.teamName) return row.teamName;
+    }
+  }
+  return null;
+}
+
+const frozenGaps = new Map(); // name|mode -> { text, cls }
 
 function formatLeaderGap(entry, leaderDistance, bestFastestMs) {
   if (!isRaceSession()) {
@@ -525,14 +954,22 @@ function formatLeaderGap(entry, leaderDistance, bestFastestMs) {
 function rightColumnValue(entry, change, carAheadDistance, bestFastestMs, leaderDistance, aheadFastestMs) {
   if (isDnf(entry)) return { text: "DNF", cls: "pos-down" };
 
+  const mode = RIGHT_COLUMN_MODES[rightColumnIndex];
   const pit = updatePitTimer(entry);
   const stats = updatePitStats(entry);
-  if (pit && (pit.phase === "in" || pit.phase === "out")) {
+  const showPitCol = isRaceSession() && (mode === "Intervalo" || mode === "Gap líder");
+
+  if (showPitCol && pit && (pit.phase === "in" || pit.phase === "out")) {
     const elapsed = Date.now() - pit.enteredAt;
     return { text: formatPitDuration(elapsed), cls: "pit-time", pitPhase: pit.phase };
   }
 
-  const mode = RIGHT_COLUMN_MODES[rightColumnIndex];
+  const freezeKey = `${entry.name}|${mode}`;
+  if (isRaceSession() && entry.raceState === 3 && (mode === "Intervalo" || mode === "Gap líder")) {
+    const frozen = frozenGaps.get(freezeKey);
+    if (frozen) return { text: frozen.text, cls: frozen.cls || "" };
+  }
+
   let result;
   if (mode === "Intervalo") {
     result = formatGap(entry, carAheadDistance, change, bestFastestMs, aheadFastestMs);
@@ -554,8 +991,19 @@ function rightColumnValue(entry, change, carAheadDistance, bestFastestMs, leader
     result = { text: "-", cls: "" };
   }
 
-  if (pit && pit.phase === "done") {
-    result.pitPhase = "done";
+  if (pit && (pit.phase === "in" || pit.phase === "out" || pit.phase === "done")) {
+    result.pitPhase = pit.phase;
+  }
+  if (isRaceSession() && (mode === "Intervalo" || mode === "Gap líder")) {
+    if (entry.raceState === 3) {
+      if (result && result.text && result.text !== "-" && !frozenGaps.has(freezeKey)) {
+        frozenGaps.set(freezeKey, { text: result.text, cls: result.cls || "" });
+      }
+      const frozen = frozenGaps.get(freezeKey);
+      if (frozen) return { text: frozen.text, cls: frozen.cls || "", pitPhase: result.pitPhase };
+    } else if (result && result.text && result.text !== "-") {
+      frozenGaps.set(freezeKey, { text: result.text, cls: result.cls || "" });
+    }
   }
   return result;
 }
@@ -572,16 +1020,18 @@ const lastDisplayPos = new Map();
 let raceStartAt = null;
 
 function isPitTrackingActive() {
-  if (!isRaceSession()) return true;
+  if (!isRaceSession()) return false;
   if (raceStartAt == null) return false;
   return Date.now() - raceStartAt >= 10000;
 }
 
 function isOutLap(entry) {
+  if (isInPit(entry) || isExitingPit(entry)) return true;
+  const pit = pitTimers.get(entry.name);
+  if (pit && pit.phase === "done") return true;
   if (!isPitTrackingActive()) return false;
   const stats = pitStats.get(entry.name);
   if (!stats) return false;
-  if (entry.pitMode === 1 || entry.pitMode === 2 || entry.pitMode === 3) return true;
   return stats.stintLaps === 0 && stats.stops > 0 && !stats.wasInPit;
 }
 
@@ -589,39 +1039,74 @@ function updateSectorDisplay(entry, purpleOwners) {
   const name = entry.name;
   let st = sectorState.get(name);
   if (!st) {
-    st = { colors: [null, null, null], lastLap: entry.currentLap || 0, clearAt: 0 };
+    st = {
+      colors: [null, null, null],
+      lastLap: entry.currentLap || 0,
+      lastSecN: 0,
+      final: [0, 0, 0],
+      committed: [false, false, false],
+      clearAt: 0,
+    };
     sectorState.set(name, st);
   }
 
+  const now = Date.now();
   const lap = entry.currentLap || 0;
-  if (lap > st.lastLap) {
-    st.clearAt = Date.now() + 10000;
-    st.lastLap = lap;
+  // AMS2 mCurrentSector: 0=S1, 1=S2, 2=S3 (UNSET=-1)
+  let raw = entry.currentSector;
+  if (raw == null || raw < 0) raw = st.lastSecN > 0 ? st.lastSecN - 1 : 0;
+  const secN = raw + 1; // 1,2,3
+  const cur = [entry.sector1Ms || 0, entry.sector2Ms || 0, entry.sector3Ms || 0];
+  const best = [entry.bestSector1Ms, entry.bestSector2Ms, entry.bestSector3Ms];
+
+  function colorFor(i, timeMs) {
+    if (!(timeMs > 0)) return null;
+    if (purpleOwners[i] === name) return "purple";
+    if (best[i] > 0 && timeMs <= best[i]) return "green";
+    return "yellow";
   }
-  if (st.clearAt && Date.now() >= st.clearAt) {
+
+  function commit(i, timeMs) {
+    if (st.committed[i] || !(timeMs > 0)) return;
+    st.colors[i] = colorFor(i, timeMs);
+    st.committed[i] = true;
+    st.final[i] = timeMs;
+  }
+
+  // nova volta → fecha S3 e agenda branco em 5s
+  if (lap > st.lastLap) {
+    if (!st.committed[2]) commit(2, st.final[2] || cur[2]);
+    st.lastLap = lap;
+    st.clearAt = now + 5000;
+    st.committed = [false, false, false];
+    st.final = [0, 0, 0];
+    st.lastSecN = secN;
+  }
+
+  if (st.clearAt && now >= st.clearAt) {
     st.colors = [null, null, null];
     st.clearAt = 0;
   }
 
   if (entry.lapInvalidated) {
     st.colors = ["red", "red", "red"];
+    st.clearAt = 0;
     return st.colors;
   }
 
-  const cur = [entry.sector1Ms, entry.sector2Ms, entry.sector3Ms];
-  const best = [entry.bestSector1Ms, entry.bestSector2Ms, entry.bestSector3Ms];
-
-  for (let i = 0; i < 3; i++) {
-    if (cur[i] > 0) {
-      if (purpleOwners[i] === name) {
-        st.colors[i] = "purple";
-      } else if (best[i] > 0 && cur[i] <= best[i]) {
-        st.colors[i] = "green";
-      } else {
-        st.colors[i] = "yellow";
-      }
-    }
+  // 0→1 (S1→S2): fecha S1 | 1→2 (S2→S3): fecha S2 | 2→0 (S3→S1): fecha S3
+  if (secN !== st.lastSecN && secN >= 1 && secN <= 3) {
+    if (st.lastSecN === 1 && secN === 2) commit(0, cur[0] || st.final[0]);
+    else if (st.lastSecN === 2 && secN === 3) commit(1, cur[1] || st.final[1]);
+    else if (st.lastSecN === 3 && secN === 1) commit(2, cur[2] || st.final[2]);
+    st.lastSecN = secN;
   }
+
+  // guarda tempos finais só de setores já concluídos
+  if (secN >= 2 && cur[0] > 0) st.final[0] = cur[0];
+  if (secN >= 3 && cur[1] > 0) st.final[1] = cur[1];
+  if (secN === 3 && cur[2] > 0) st.final[2] = cur[2];
+
   return st.colors;
 }
 
@@ -630,12 +1115,14 @@ function computePurpleOwners(standings, isClassMode) {
   const best = [Infinity, Infinity, Infinity];
   standings.forEach((e) => {
     if (e.lapInvalidated) return;
-    if (e.pitMode === 1 || e.pitMode === 2 || e.pitMode === 3) return;
+    if (e.pitMode === 1 || e.pitMode === 2 || e.pitMode === 3 || e.pitMode === 4 || e.pitMode === 5) return;
     if (isOutLap(e)) return;
-    const cur = [e.sector1Ms, e.sector2Ms, e.sector3Ms];
+    const st = sectorState.get(e.name);
     for (let i = 0; i < 3; i++) {
-      if (cur[i] > 0 && cur[i] < best[i]) {
-        best[i] = cur[i];
+      if (!st || !st.committed[i]) continue;
+      const v = (st.final && st.final[i]) || 0;
+      if (v > 0 && v < best[i]) {
+        best[i] = v;
         owners[i] = e.name;
       }
     }
@@ -651,12 +1138,12 @@ function updatePitStats(entry) {
     pitStats.set(name, st);
   }
   if (!isPitTrackingActive()) {
-    st.wasInPit = entry.pitMode === 1 || entry.pitMode === 2;
+    st.wasInPit = isInPit(entry);
     st.stintStartLap = entry.lapsCompleted || 0;
     st.stintLaps = 0;
     return st;
   }
-  const inPit = entry.pitMode === 1 || entry.pitMode === 2;
+  const inPit = isInPit(entry);
   if (inPit && !st.wasInPit) {
     st.stops += 1;
     st.wasInPit = true;
@@ -669,18 +1156,16 @@ function updatePitStats(entry) {
 }
 
 function isInPit(entry) {
-  return entry.pitMode === 1 || entry.pitMode === 2;
+  // 1=entrando, 2=no pitlane, 4=garagem
+  return entry.pitMode === 1 || entry.pitMode === 2 || entry.pitMode === 4;
 }
 
 function isExitingPit(entry) {
-  return entry.pitMode === 3;
+  // 3=saindo do pit, 5=saindo da garagem
+  return entry.pitMode === 3 || entry.pitMode === 5;
 }
 
 function updatePitTimer(entry) {
-  if (!isPitTrackingActive()) {
-    pitTimers.delete(entry.name);
-    return null;
-  }
   const name = entry.name;
   const now = Date.now();
   let st = pitTimers.get(name);
@@ -705,6 +1190,7 @@ function updatePitTimer(entry) {
 
   if (st && st.phase === "done") {
     const lap = entry.currentLap ?? entry.lapsCompleted ?? 0;
+    // mantém OUT até completar a volta (corrida e qualy)
     if (lap > st.exitLap) {
       pitTimers.delete(name);
       return null;
@@ -723,6 +1209,7 @@ function formatPitDuration(ms) {
 }
 
 function isDnf(entry) {
+  if (entry.disconnected) return true;
   if (entry.raceState === 6 || entry.raceState === 5 || entry.raceState === 4) return true;
   if (!entry.inRace || entry.lapsCompleted < 1) return false;
   if (entry.pitMode !== 4) {
@@ -880,14 +1367,22 @@ function buildDisplayList(standings) {
   }
 
   if (mode === "Minha classe") {
-    const splitCar = isSplitByCarSession(standings);
     const me = standings.find((e) => isStablePlayer(e));
-    const myKey = splitCar
-      ? (me && me.carName)
-      : getStablePlayerClass(standings);
+    let myKey = null;
+    let matchFn = null;
+    if (rltEnabled() && me) {
+      myKey = groupKey(me, standings);
+      matchFn = (e) => groupKey(e, standings) === myKey;
+    } else if (isSplitByCarSession(standings)) {
+      myKey = me && me.carName;
+      matchFn = (e) => e.carName === myKey;
+    } else {
+      myKey = getStablePlayerClass(standings);
+      matchFn = (e) => e.carClass === myKey;
+    }
     if (!myKey) return [];
     const ordered = standings
-      .filter((e) => (splitCar ? e.carName : e.carClass) === myKey)
+      .filter(matchFn)
       .slice()
       .sort(sortByTiming)
       .map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 }));
@@ -909,6 +1404,11 @@ function buildDisplayList(standings) {
 function currentPageLabel(standings) {
   const mode = currentPageMode(standings);
   if (mode === "Minha classe") {
+    if (rltEnabled()) {
+      const me = (standings || []).find((e) => isStablePlayer(e));
+      const info = me ? rltLookup(me) : null;
+      if (info && (info.name || info.uniqueName)) return info.name || info.uniqueName;
+    }
     if (isSplitByCarSession(standings)) {
       const me = standings.find((e) => isStablePlayer(e));
       return (me && me.carName) || "Minha classe";
@@ -919,7 +1419,373 @@ function currentPageLabel(standings) {
   return mode;
 }
 
+let standingsView = false;
+const STANDINGS_COLUMN_MODES = ["Pts", "Pts proj.", "Gap líder"];
+let standingsColumnIndex = 0;
+const RACE_POINTS = [0, 45, 38, 32, 27, 23, 20, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5];
+
+function racePointsForPos(pos) {
+  if (!pos || pos < 1) return 0;
+  if (pos < RACE_POINTS.length) return RACE_POINTS[pos];
+  return 0;
+}
+
+function formatPosDelta(n) {
+  if (n == null || n === 0) return { text: "=", cls: "" };
+  if (n > 0) return { text: `▲${n}`, cls: "pos-up" };
+  return { text: `▼${Math.abs(n)}`, cls: "pos-down" };
+}
+
+function liveRacePosByDriver(standings, classMode) {
+  const map = new Map();
+  if (!standings || !standings.length) return map;
+  if (classMode) {
+    const groups = {};
+    standings.forEach((e) => {
+      const k = groupKey(e, standings);
+      (groups[k] = groups[k] || []).push(e);
+    });
+    Object.values(groups).forEach((list) => {
+      list
+        .slice()
+        .sort((a, b) => a.position - b.position)
+        .forEach((e, i) => {
+          const racePos = i + 1;
+          const info = rltLookup(e);
+          map.set(normalizeDriverName(e.name), racePos);
+          if (info) {
+            map.set(normalizeDriverName(info.displayName || ""), racePos);
+            (info.aliases || []).forEach((a) => map.set(a, racePos));
+          }
+        });
+    });
+  } else {
+    standings.forEach((e) => {
+      const racePos = e.position;
+      const info = rltLookup(e);
+      map.set(normalizeDriverName(e.name), racePos);
+      if (info) {
+        map.set(normalizeDriverName(info.displayName || ""), racePos);
+        (info.aliases || []).forEach((a) => map.set(a, racePos));
+      }
+    });
+  }
+  return map;
+}
+
+function lookupLivePos(row, liveMap) {
+  const keys = [
+    normalizeDriverName(row.displayName),
+    normalizeDriverName(row.driverName),
+    ...(row.aliases || []),
+  ];
+  for (const k of keys) {
+    if (k && liveMap.has(k)) return liveMap.get(k);
+  }
+  return null;
+}
+
+function assistedClassKey(standings) {
+  const me = (standings || []).find((e) => isStablePlayer(e));
+  if (!me) return null;
+  const info = rltLookup(me);
+  if (info) return info.uniqueName || info.name;
+  return null;
+}
+
+function classStandingPos(r) {
+  return r.classPosition != null ? r.classPosition : r.position || 999;
+}
+
+function buildStandingsDisplayList(standings) {
+  const rows = (rltConfig && rltConfig.standingsRows) || [];
+  if (!rows.length) return [];
+  const mode = currentPageMode(standings);
+
+  function limitRows(ordered) {
+    const maxSlots = maxDriverSlots();
+    if (ordered.length <= maxSlots) return ordered;
+    const fixedCount = Math.min(10, ordered.length);
+    const fixed = ordered.slice(0, fixedCount);
+    const rest = ordered.slice(fixedCount);
+    const extraSlots = Math.max(0, maxSlots - fixedCount);
+    if (extraSlots <= 0 || rest.length === 0) return fixed;
+    const rotated = pickRotated(rest, rotateTick, extraSlots).map((item) =>
+      Object.assign({}, item, { rotating: true })
+    );
+    while (rotated.length < extraSlots) rotated.push({ type: "spacer" });
+    return fixed.concat(rotated);
+  }
+
+  function asItems(list, classMode) {
+    const ordered = list
+      .slice()
+      .sort((a, b) => {
+        if (classMode) return classStandingPos(a) - classStandingPos(b);
+        return (a.position || 999) - (b.position || 999);
+      })
+      .map((r) => ({
+        type: "row",
+        row: r,
+        displayPosition: classMode ? classStandingPos(r) : r.position,
+        classMode: !!classMode,
+      }));
+    return limitRows(ordered);
+  }
+
+  if (mode === "Multiclasse") {
+    const groups = {};
+    rows.forEach((r) => {
+      const k = r.classUniqueName || r.className || "—";
+      if (k === "—") return;
+      (groups[k] = groups[k] || []).push(r);
+    });
+    // slotsPerClass espera entry.groupKey via groupKey - adaptar tamanhos por classe
+    const sizeMap = {};
+    Object.keys(groups).forEach((k) => {
+      sizeMap[k] = groups[k];
+    });
+    const perClass = slotsPerClass(sizeMap);
+    const classKeys = Object.keys(groups).sort((a, b) => {
+      const na = (groups[a][0] && groups[a][0].className) || a;
+      const nb = (groups[b][0] && groups[b][0].className) || b;
+      return String(na).localeCompare(String(nb));
+    });
+    let maxPages = 1;
+    classKeys.forEach((cls) => {
+      const size = groups[cls].length;
+      const slots = perClass[cls] || 1;
+      const fixedCount = Math.max(1, Math.ceil(slots / 2));
+      const extra = Math.max(0, slots - fixedCount);
+      const rest = Math.max(0, size - fixedCount);
+      if (extra > 0 && rest > extra) maxPages = Math.max(maxPages, Math.ceil(rest / extra));
+    });
+    const list = [];
+    classKeys.forEach((k) => {
+      const label = groups[k][0].className || k;
+      list.push({ type: "header", label: k, title: label, color: groups[k][0].color });
+      const sorted = groups[k]
+        .slice()
+        .sort((a, b) => classStandingPos(a) - classStandingPos(b))
+        .map((r, i) => ({ type: "row", row: r, displayPosition: i + 1, classMode: true }));
+      const maxSlots = perClass[k] || 1;
+      const fixedCount = Math.max(1, Math.ceil(maxSlots / 2));
+      const extraSlots = Math.max(0, maxSlots - fixedCount);
+      if (sorted.length <= maxSlots) {
+        sorted.forEach((item) => list.push(item));
+        for (let s = sorted.length; s < maxSlots; s++) list.push({ type: "spacer" });
+        return;
+      }
+      sorted.slice(0, fixedCount).forEach((item) => list.push(item));
+      if (extraSlots > 0) {
+        const page = pickRotated(sorted.slice(fixedCount), rotateTick, extraSlots, maxPages);
+        page.forEach((item) => list.push(Object.assign({}, item, { rotating: true })));
+        for (let s = page.length; s < extraSlots; s++) list.push({ type: "spacer" });
+      }
+    });
+    return list;
+  }
+
+  if (mode === "Minha classe") {
+    const myKey = assistedClassKey(standings);
+    if (!myKey) return asItems(rows, false);
+    const filtered = rows.filter((r) => r.classUniqueName === myKey || r.className === myKey);
+    return asItems(filtered, true);
+  }
+
+  return asItems(rows, false);
+}
+
+function renderStandings(standings) {
+  const container = document.getElementById("rows");
+  const pageLabel = document.getElementById("pageLabel");
+  const rightLabel = document.getElementById("rightColumnLabel");
+  const sessionLabel = document.getElementById("sessionLabel");
+  const timerEl = document.getElementById("sessionTimer");
+
+  const seasonName = (rltConfig && rltConfig.seasonName) || "STANDINGS";
+  sessionLabel.textContent = "STANDINGS";
+  timerEl.textContent = seasonName;
+  timerEl.style.fontSize = seasonName.length > 22 ? "22px" : "26px";
+  pageLabel.textContent = currentPageLabel(standings);
+  const colMode = STANDINGS_COLUMN_MODES[standingsColumnIndex];
+  rightLabel.textContent = colMode;
+
+  const classMode = currentPageMode(standings) !== "Geral";
+  const liveMap = liveRacePosByDriver(standings, classMode);
+  const displayList = buildStandingsDisplayList(standings);
+
+  const inRace = isRaceSession();
+  const projected = new Map();
+  displayList.forEach((item) => {
+    if (item.type !== "row") return;
+    const base = item.classMode
+      ? Number(item.row.classPointsRaw != null ? item.row.classPointsRaw : item.row.pointsRaw) || 0
+      : Number(item.row.pointsRaw) || 0;
+    const racePos = lookupLivePos(item.row, liveMap);
+    const add = inRace && racePos ? racePointsForPos(racePos) : 0;
+    projected.set(item.row, { base, add, total: base + add, racePos });
+  });
+
+  // ranking atual vs projetado por grupo
+  const rankDelta = new Map();
+  {
+    const groups = {};
+    displayList.forEach((item) => {
+      if (item.type !== "row") return;
+      const g = item.classMode ? item.row.classUniqueName || "—" : "_all";
+      (groups[g] = groups[g] || []).push(item);
+    });
+    Object.values(groups).forEach((items) => {
+      const score = (r, key) => {
+        const p = projected.get(r) || {};
+        const v = Number(p[key]);
+        return Number.isFinite(v) ? v : 0;
+      };
+      const byBase = items.slice().sort((a, b) => score(b.row, "base") - score(a.row, "base"));
+      const byProj = items.slice().sort((a, b) => score(b.row, "total") - score(a.row, "total"));
+      const curRank = new Map();
+      const projRank = new Map();
+      byBase.forEach((it, i) => curRank.set(it.row, i + 1));
+      byProj.forEach((it, i) => projRank.set(it.row, i + 1));
+      items.forEach((it) => {
+        rankDelta.set(it.row, (curRank.get(it.row) || 0) - (projRank.get(it.row) || 0));
+      });
+    });
+  }
+
+  const leaderByGroup = new Map();
+  if (colMode === "Gap líder") {
+    let overallLeader = 0;
+    displayList.forEach((item) => {
+      if (item.type !== "row") return;
+      const pts = (projected.get(item.row) || {}).total || 0;
+      const g = classMode ? item.row.classUniqueName || "—" : "_all";
+      const cur = leaderByGroup.get(g) || 0;
+      if (pts > cur) leaderByGroup.set(g, pts);
+      if (pts > overallLeader) overallLeader = pts;
+    });
+    if (!classMode) leaderByGroup.set("_all", overallLeader);
+  }
+
+  while (container.children.length > displayList.length) {
+    container.removeChild(container.lastChild);
+  }
+
+  const me = (standings || []).find((e) => isStablePlayer(e));
+  const meInfo = me ? rltLookup(me) : null;
+  const meKeys = new Set();
+  if (me) {
+    meKeys.add(normalizeDriverName(me.name));
+    if (meInfo) {
+      meKeys.add(normalizeDriverName(meInfo.displayName));
+      (meInfo.aliases || []).forEach((a) => meKeys.add(a));
+    }
+  }
+
+  displayList.forEach((item, i) => {
+    let el = container.children[i];
+    if (item.type === "header") {
+      if (!el || el.className !== "class-header") {
+        const fresh = document.createElement("div");
+        fresh.className = "class-header";
+        if (el) container.replaceChild(fresh, el);
+        else container.appendChild(fresh);
+        el = fresh;
+      }
+      el.textContent = item.title || groupLabel(item.label) || item.label;
+      const hClr = item.color || classColor(item.label);
+      el.style.borderLeftColor = hClr;
+      el.style.background = hClr;
+      el.style.color = contrastText(hClr);
+      return;
+    }
+
+    if (item.type === "spacer") {
+      if (!el || el.className !== "row spacer") {
+        const fresh = document.createElement("div");
+        fresh.className = "row spacer";
+        fresh.innerHTML = "";
+        if (el) container.replaceChild(fresh, el);
+        else container.appendChild(fresh);
+      }
+      return;
+    }
+
+    const row = item.row;
+    if (!el || el.dataset.view !== "standings") {
+      const fresh = document.createElement("div");
+      fresh.className = "row";
+      fresh.dataset.view = "standings";
+      fresh.innerHTML =
+        '<span class="col pos"></span><span class="col name"><img class="logo" style="display:none" /><span class="name-text"></span></span><span class="col right-value"></span>';
+      if (el) container.replaceChild(fresh, el);
+      else container.appendChild(fresh);
+      el = fresh;
+    }
+
+    const pos = item.displayPosition != null ? item.displayPosition : row.position;
+    const clr = row.color || classColor(row.classUniqueName);
+    el.style.borderTopColor = clr || "";
+    let isAssisted = false;
+    if (playerHighlightEnabled && meKeys.size) {
+      const rowKeys = [
+        normalizeDriverName(row.displayName),
+        normalizeDriverName(row.driverName),
+        ...(row.aliases || []),
+      ];
+      isAssisted = rowKeys.some((k) => k && meKeys.has(k));
+    }
+    el.classList.toggle("player", isAssisted);
+    el.classList.remove("fastest", "finished", "dnf", "yellow-flag");
+    el.style.backgroundColor = rowBg(isAssisted ? "#006bdd" : "#0e42a5");
+    const posEl = el.querySelector(".pos");
+    posEl.textContent = String(pos || "—");
+    posEl.style.background = clr || "#0e42a5";
+    posEl.style.color = contrastText(clr || "#0e42a5");
+    applyLogo(el.querySelector(".logo"), row.teamName, row.teamName);
+    el.querySelector(".name-text").textContent = row.displayName || row.driverName || "—";
+
+    const right = el.querySelector(".right-value");
+    const useClass = !!item.classMode;
+    const ptsText = useClass ? (row.classPoints != null ? row.classPoints : row.points) : row.points;
+    const projInfo = projected.get(row) || { base: 0, add: 0, total: 0 };
+    const addPts = Number(projInfo.add) || 0;
+    const totalPts = Number(projInfo.total);
+    const safeTotal = Number.isFinite(totalPts) ? totalPts : Number(projInfo.base) || 0;
+    let text = String(ptsText || "0");
+    let cls = "";
+    if (colMode === "Pts") {
+      const delta = formatPosDelta(useClass ? row.classPositionChange : row.positionChange);
+      text = delta.text !== "=" ? `${ptsText || "0"} ${delta.text}` : String(ptsText || "0");
+      cls = delta.cls || "";
+    } else if (colMode === "Pts proj.") {
+      if (!inRace) {
+        text = String(safeTotal);
+        cls = "";
+      } else {
+        const deltaRank = Number(rankDelta.get(row)) || 0;
+        const rd = formatPosDelta(deltaRank);
+        text = `${safeTotal}(+${addPts})${rd.text !== "=" ? rd.text : ""}`;
+        cls = rd.cls || "";
+      }
+    } else if (colMode === "Gap líder") {
+      const g = classMode ? row.classUniqueName || "—" : "_all";
+      const leaderPts = Number(leaderByGroup.get(g)) || 0;
+      const gap = leaderPts - safeTotal;
+      text = !Number.isFinite(gap) || gap <= 0 ? "—" : "-" + String(gap);
+      cls = "";
+    }
+    right.className = "col right-value" + (cls ? " " + cls : "");
+    right.textContent = text;
+  });
+}
+
 function render(standings) {
+  if (standingsView) {
+    renderStandings(standings);
+    return;
+  }
   document.getElementById("rightColumnLabel").textContent = RIGHT_COLUMN_MODES[rightColumnIndex];
   document.getElementById("pageLabel").textContent = currentPageLabel(standings);
 
@@ -1023,7 +1889,7 @@ function render(standings) {
         else container.appendChild(fresh);
         el = fresh;
       }
-      el.textContent = formatClassName(item.label);
+      el.textContent = formatClassName(groupLabel(item.label));
       const hClr = classColor(item.label);
       el.style.borderLeftColor = hClr;
       el.style.background = hClr;
@@ -1064,10 +1930,11 @@ function render(standings) {
       groupLeaderDistance = overallLeaderDistance;
     }
 
-    if (!el || el.dataset.kind !== "row") {
+    if (!el || el.dataset.kind !== "row" || el.dataset.view === "standings") {
       const fresh = document.createElement("div");
       fresh.className = "row";
       fresh.dataset.kind = "row";
+      fresh.dataset.view = "race";
       fresh.innerHTML = `
         <span class="col pos"></span>
         <span class="col name"><img class="logo" style="display:none" /><span class="name-text"></span><span class="sectors"><i></i><i></i><i></i></span><span class="pit-badge" style="display:none">P</span></span>
@@ -1103,14 +1970,14 @@ function render(standings) {
       isPurple = false;
     }
     el.classList.toggle("fastest", isPurple);
-    const clr = classColor(isSplitByCarSession(standings) ? groupKey(entry, standings) : entry.carClass);
+    const clr = classColor(groupKey(entry, standings));
     el.style.borderTopColor = clr;
     el.classList.toggle("yellow-flag", !!entry.causedYellow);
     if (!el.classList.contains("flash-up") && !el.classList.contains("flash-down")) {
       if (entry.causedYellow) {
-        el.style.backgroundColor = "#c9a000";
+        el.style.backgroundColor = rowBg("#c9a000");
       } else {
-        el.style.backgroundColor = el.classList.contains("player") ? "#006bdd" : "#0e42a5";
+        el.style.backgroundColor = rowBg(el.classList.contains("player") ? "#006bdd" : "#0e42a5");
       }
     }
     const posEl = el.querySelector(".pos");
@@ -1126,9 +1993,9 @@ function render(standings) {
       setTimeout(() => {
         el.classList.remove(flashCls);
         if (entry.causedYellow) {
-          el.style.backgroundColor = "#c9a000";
+          el.style.backgroundColor = rowBg("#c9a000");
         } else {
-          el.style.backgroundColor = el.classList.contains("player") ? "#006bdd" : "#0e42a5";
+          el.style.backgroundColor = rowBg(el.classList.contains("player") ? "#006bdd" : "#0e42a5");
         }
       }, 500);
     }
@@ -1143,19 +2010,21 @@ function render(standings) {
     el.dataset.name = entry.name;
     el.dataset.pos = String(item.displayPosition);
 
-    const logoFile = carLogo(entry.carName);
     const logoImg = el.querySelector(".logo");
-    if (logoFile) {
-      logoImg.src = `assets/logos/${logoFile}`;
-      logoImg.style.display = "";
-    } else {
-      logoImg.style.display = "none";
+    applyLogo(logoImg, rltTeamName(entry), entry.carName);
+    const gainEl = el.querySelector(".pos-gain");
+    if (gainEl) {
+      gainEl.style.display = "none";
+      gainEl.textContent = "";
     }
 
     const change = positionChange(entry, item.displayPosition, isClassMode, standings);
+    const finished = entry.raceState === 3;
+    el.classList.toggle("finished", !!finished && isRaceSession());
+
     const gapRef = (typeof entry._aheadDistance === "number") ? entry._aheadDistance : prevDistance;
     posEl.textContent = item.displayPosition;
-    el.querySelector(".name-text").textContent = entry.name;
+    el.querySelector(".name-text").textContent = rltDisplayName(entry);
     const gKey = groupKey(entry, standings);
     const rowBestFastest = (isClassMode && bestFastestByClass[gKey] != null)
       ? bestFastestByClass[gKey]
@@ -1167,11 +2036,16 @@ function render(standings) {
     rvEl.className = "col right-value" + (rv.cls ? ` ${rv.cls}` : "");
 
     const badge = el.querySelector(".pit-badge");
-    if (rv.pitPhase === "in" || rv.pitPhase === "out") {
+    const inPitNow = isInPit(entry) || isExitingPit(entry);
+    const pitSt = pitTimers.get(entry.name);
+    const showOut =
+      !inPitNow &&
+      (rv.pitPhase === "done" || (pitSt && pitSt.phase === "done") || isOutLap(entry));
+    if (inPitNow || rv.pitPhase === "in" || rv.pitPhase === "out") {
       badge.style.display = "";
       badge.textContent = "P";
       badge.className = "pit-badge pit-in";
-    } else if (rv.pitPhase === "done") {
+    } else if (showOut) {
       badge.style.display = "";
       badge.textContent = "OUT";
       badge.className = "pit-badge pit-out";
@@ -1182,17 +2056,23 @@ function render(standings) {
 
     const secWrap = el.querySelector(".sectors");
     if (secWrap) {
-      const showSec = (isTimedSession() || !isRaceSession())
-        && !isOutLap(entry)
-        && entry.pitMode !== 1
-        && entry.pitMode !== 2
-        && entry.pitMode !== 3;
+      // esconde setores no box e na volta de saída (OUT) — evita vermelho no lugar do OUT
+      const showSec =
+        (isTimedSession() || !isRaceSession()) &&
+        !inPitNow &&
+        !showOut &&
+        entry.pitMode === 0;
       secWrap.style.display = showSec ? "" : "none";
       if (showSec) {
         const colors = updateSectorDisplay(entry, purpleOwners);
         const boxes = secWrap.querySelectorAll("i");
         boxes.forEach((box, idx) => {
           box.className = colors[idx] ? `sec-${colors[idx]}` : "";
+        });
+      } else {
+        const boxes = secWrap.querySelectorAll("i");
+        boxes.forEach((box) => {
+          box.className = "";
         });
       }
     }
@@ -1211,6 +2091,11 @@ function formatTime(ms) {
 document.addEventListener("keydown", (e) => {
   const c = e.code;
   const k = e.key;
+  if (c === "Digit0" || c === "Numpad0" || k === "0") {
+    standingsView = !standingsView;
+    render(latestStandings);
+    return;
+  }
   if (c === "Comma" || k === ",") applyOverlayCommand("overlay.prevColumn");
   else if (c === "Period" || k === ".") applyOverlayCommand("overlay.nextColumn");
   else if (c === "BracketLeft" || k === "[" || k === "{") applyOverlayCommand("overlay.prevPage");
