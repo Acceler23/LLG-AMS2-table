@@ -603,11 +603,22 @@ function mergeDisconnectedDrivers(standings) {
         raceState: 5,
         speedMs: 0,
         disconnected: true,
+        _lastPos: cached.position || 999,
+        position: 9000 + (cached.position || 999),
       })
     );
   });
-  merged.sort((a, b) => (a.position || 999) - (b.position || 999));
+  merged.sort(sortRaceOrder);
   return merged;
+}
+
+function sortRaceOrder(a, b) {
+  const da = isDnf(a) ? 1 : 0;
+  const db = isDnf(b) ? 1 : 0;
+  if (da !== db) return da - db;
+  const pa = da ? (a._lastPos || a.position || 999) : (a.position || 999);
+  const pb = db ? (b._lastPos || b.position || 999) : (b.position || 999);
+  return pa - pb;
 }
 
 function connect() {
@@ -827,12 +838,14 @@ function contrastText(bg) {
 }
 
 function sortByTiming(a, b) {
-  if (!isRaceSession()) {
-    const fa = a.fastestLapMs > 0 ? a.fastestLapMs : Infinity;
-    const fb = b.fastestLapMs > 0 ? b.fastestLapMs : Infinity;
-    if (fa !== fb) return fa - fb;
-  }
-  return a.position - b.position;
+  if (isRaceSession()) return sortRaceOrder(a, b);
+  const da = isDnf(a) ? 1 : 0;
+  const db = isDnf(b) ? 1 : 0;
+  if (da !== db) return da - db;
+  const fa = a.fastestLapMs > 0 ? a.fastestLapMs : Infinity;
+  const fb = b.fastestLapMs > 0 ? b.fastestLapMs : Infinity;
+  if (fa !== fb) return fa - fb;
+  return (a.position || 999) - (b.position || 999);
 }
 
 // Nao existe campo na Shared Memory que diga "estou so' assistindo" --
@@ -1402,7 +1415,14 @@ function buildDisplayList(standings) {
     if (!isRaceSession()) {
       ordered = standings.slice().sort(sortByTiming).map((e, i) => ({ type: "row", entry: e, displayPosition: i + 1 }));
     } else {
-      ordered = standings.map((e) => ({ type: "row", entry: e, displayPosition: e.position }));
+      ordered = standings
+        .slice()
+        .sort(sortRaceOrder)
+        .map((e, i) => ({
+          type: "row",
+          entry: e,
+          displayPosition: isDnf(e) ? e._lastPos || e.position || i + 1 : e.position || i + 1,
+        }));
     }
     const maxSlots = maxDriverSlots();
     if (ordered.length <= maxSlots) return withAhead(ordered);

@@ -390,4 +390,5 @@ const RLT_INGAME_MAP = {
 const TEAM_LOGO_OVERRIDES = {
   "E.C.H.O": "echo.png",
   "Apex": "apex_racing.png",
+  "Heat": "heat_racing.png",
 };

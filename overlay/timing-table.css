@@ -218,7 +218,7 @@ html, body {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 22px;
+  font-size: 20px;
   white-space: nowrap;
 }
 
@@ -315,7 +315,7 @@ html, body {
 
 .row.fastest .right-value,
 .right-value.fastest-gap {
-  color: #d24bff;
+  color: #ff00ff;
   font-weight: 700;
 }
 
