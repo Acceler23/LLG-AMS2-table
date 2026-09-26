@@ -178,7 +178,7 @@ const CLASS_COLORS = {
   "GT1": "#cdcdcd",
   "GT1_05": "#46d4f2",
   "GT2_05": "#f0ca19",
-  "GT3": "#00a950",
+  "GT3": "#006630",
   "GT3_Gen2": "#00a950",
   "GT4": "#5b616a",
   "GT5": "#3144e6",
@@ -384,8 +384,10 @@ const CAR_LOGOS = {
   "Vulkan": "volvo.png",
 };
 
-// Override de logo de equipe: nome da equipe (como vem da API) → arquivo em assets/teams/
-// Ex: "Minha Equipe": "minha_equipe.png"
+const RLT_INGAME_MAP = {
+};
+
 const TEAM_LOGO_OVERRIDES = {
-  "E.C.H.O": "echo.png"
+  "E.C.H.O": "echo.png",
+  "Apex": "apex_racing.png",
 };

@@ -29,6 +29,8 @@ $OFFSET_CAR_NAMES                = 11056 # char[64][64]
 $OFFSET_CAR_CLASS_NAMES          = 15152 # char[64][64]
 $OFFSET_TRACK_LENGTH             = 6704  # float, metros (unico, nao por participante)
 $OFFSET_LAPS_IN_EVENT            = 6572  # uint, total de voltas (0 = corrida por tempo)
+$OFFSET_TRACK_LOCATION           = 6576  # char[64] mTrackLocation
+$OFFSET_TRACK_VARIATION          = 6640  # char[64] mTrackVariation
 $OFFSET_FUEL_LEVEL               = 6840  # float 0-1, so local
 $OFFSET_FUEL_CAPACITY            = 6844  # float litros, so local
 $OFFSET_TYRE_COMPOUND            = 19388 # char[4][40], so local
@@ -117,10 +119,18 @@ $maxSpeedKmh = @{}
 
 function Read-CString($accessor, $offset, $maxLen) {
     $bytes = New-Object byte[] $maxLen
-    $bytesRead = $accessor.ReadArray($offset, $bytes, 0, $maxLen)
+    [void]$accessor.ReadArray($offset, $bytes, 0, $maxLen)
     $nullIndex = [Array]::IndexOf($bytes, [byte]0)
     if ($nullIndex -lt 0) { $nullIndex = $maxLen }
-    return [System.Text.Encoding]::UTF8.GetString($bytes, 0, $nullIndex)
+    if ($nullIndex -le 0) { return "" }
+    $slice = New-Object byte[] $nullIndex
+    [Array]::Copy($bytes, 0, $slice, 0, $nullIndex)
+    try {
+        $utf8 = New-Object System.Text.UTF8Encoding $false, $true
+        return $utf8.GetString($slice)
+    } catch {
+        return [System.Text.Encoding]::GetEncoding(1252).GetString($slice)
+    }
 }
 
 Write-Host "Bridge (Shared Memory) iniciando..."
@@ -142,6 +152,8 @@ while ($true) {
                 $timeRemainingSec = [int]$accessor.ReadSingle($OFFSET_EVENT_TIME_REMAINING)
                 $trackLength = $accessor.ReadSingle($OFFSET_TRACK_LENGTH)
                 $lapsInEvent = $accessor.ReadUInt32($OFFSET_LAPS_IN_EVENT)
+                $trackLocation = Read-CString $accessor $OFFSET_TRACK_LOCATION 64
+                $trackVariation = Read-CString $accessor $OFFSET_TRACK_VARIATION 64
                 $splitAhead = $accessor.ReadSingle($OFFSET_SPLIT_TIME_AHEAD)
                 $inRace = ($sessionState -eq 5)
 
@@ -361,6 +373,9 @@ while ($true) {
                         timeRemainingSec = $timeRemainingSec
                         lapsInEvent      = [int]$lapsInEvent
                         scOut            = $scOut
+                        trackLocation    = $trackLocation
+                        trackVariation   = $trackVariation
+                        trackLength      = [math]::Round([double]$trackLength, 1)
                     }
                     standings = $standingsSorted
                     car       = $car

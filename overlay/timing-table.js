@@ -33,6 +33,7 @@ function rowBg(hex) {
 function normalizeDriverName(name) {
   return String(name || "")
     .replace(/\[[^\]]*\]/g, "")
+    .replace(/[\u200B-\u200D\uFEFF\u00AD]/g, "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[|\/\\]+/g, " ")
@@ -111,12 +112,19 @@ function scoreAlias(target, targetTokens, targetLast, al) {
 
   score = Math.max(score, tokenJaccard(targetTokens, alTokens));
 
-  if (targetLast && alLast && targetLast === alLast && targetLast.length >= 3) {
-    score = Math.max(score, 0.99);
-    if (targetTokens.length >= 2) {
-      const t0 = targetTokens[0].replace(/\./g, "");
-      if (t0.length === 1 && alFirst.startsWith(t0)) score = Math.max(score, 0.995);
+  if (targetLast && targetLast.length >= 3) {
+    if (alLast === targetLast) {
+      score = Math.max(score, 0.99);
+      if (targetTokens.length >= 2) {
+        const t0 = targetTokens[0].replace(/\./g, "");
+        if (t0.length === 1 && alFirst.startsWith(t0)) score = Math.max(score, 0.995);
+        else if (t0.length === 1) score = Math.max(score, 0.99);
+      }
     }
+    for (const t of alTokens) {
+      if (t === targetLast) score = Math.max(score, 0.99);
+    }
+    if (al.endsWith(targetLast) && targetLast.length >= 4) score = Math.max(score, 0.99);
   }
 
   if (targetTokens.length === 1) {
@@ -138,6 +146,7 @@ function scoreAlias(target, targetTokens, targetLast, al) {
     }
   }
 
+  if (target === al) score = 1;
   if (target.includes(al) || al.includes(target)) {
     const ratio = Math.min(target.length, al.length) / Math.max(target.length, al.length);
     if (ratio >= 0.75) score = Math.max(score, Math.max(ratio, 0.9));
@@ -145,7 +154,9 @@ function scoreAlias(target, targetTokens, targetLast, al) {
 
   if (targetTokens.length === 2 && targetTokens[0].replace(/\./g, "").length === 1 && alTokens.length >= 2) {
     const ini = targetTokens[0].replace(/\./g, "");
-    if (alFirst.startsWith(ini) && targetLast === alLast) score = Math.max(score, 0.995);
+    if (targetLast === alLast) {
+      score = Math.max(score, alFirst.startsWith(ini) ? 0.995 : 0.99);
+    }
   }
 
   return score;
@@ -153,22 +164,71 @@ function scoreAlias(target, targetTokens, targetLast, al) {
 
 function rltLookupByMap(raw) {
   if (typeof RLT_INGAME_MAP === "undefined" || !RLT_INGAME_MAP) return null;
-  const key = Object.keys(RLT_INGAME_MAP).find(
-    (k) => normalizeDriverName(k) === normalizeDriverName(raw)
-  );
+  const rawN = normalizeDriverName(raw);
+  const key = Object.keys(RLT_INGAME_MAP).find((k) => {
+    const kn = normalizeDriverName(k);
+    return kn === rawN || (rawN && kn && (rawN.endsWith(kn) || kn.endsWith(rawN)));
+  });
   if (!key) return null;
   const want = normalizeDriverName(RLT_INGAME_MAP[key]);
-  if (!rltConfig || !Array.isArray(rltConfig.drivers)) return null;
-  for (const d of rltConfig.drivers) {
-    if (normalizeDriverName(d.displayName) === want) return d;
-    if (normalizeDriverName(`${d.firstName || ""} ${d.lastName || ""}`) === want) return d;
-    if ((d.aliases || []).some((a) => a === want)) return d;
+  if (!want || !rltConfig) return null;
+  const wantParts = want.split(" ").filter(Boolean);
+  const wantLast = wantParts[wantParts.length - 1] || "";
+  const pool = rltDriverPool();
+  for (const d of pool) {
+    const names = [
+      normalizeDriverName(d.displayName),
+      normalizeDriverName(d.driverName),
+      normalizeDriverName(`${d.firstName || ""} ${d.lastName || ""}`),
+      normalizeDriverName(d.lastName),
+      normalizeDriverName(d.firstName),
+      ...(d.aliases || []),
+    ].filter(Boolean);
+    for (const n of names) {
+      if (n === want) return d;
+      if (n.endsWith(want) && want.length >= 4) return d;
+      if (want.endsWith(n) && n.length >= 4) return d;
+      const parts = n.split(" ").filter(Boolean);
+      if (parts[parts.length - 1] === want) return d;
+      if (wantLast && parts[parts.length - 1] === wantLast && wantLast.length >= 4) {
+        if (wantParts.length === 1) return d;
+        if (wantParts[0] && parts[0] === wantParts[0]) return d;
+        if (d.firstName && normalizeDriverName(d.firstName) === wantParts[0]) return d;
+      }
+    }
   }
   return null;
 }
 
+function rltDriverPool() {
+  const list = [];
+  const seen = new Set();
+  function add(d) {
+    if (!d) return;
+    const key = normalizeDriverName(d.displayName || d.driverName || `${d.firstName || ""} ${d.lastName || ""}`);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    list.push(d);
+  }
+  (rltConfig.drivers || []).forEach(add);
+  (rltConfig.standingsRows || []).forEach((row) => {
+    add({
+      displayName: row.displayName,
+      driverName: row.driverName,
+      firstName: row.firstName,
+      lastName: row.lastName,
+      teamName: row.teamName,
+      aliases: row.aliases || [],
+      uniqueName: row.classUniqueName,
+      name: row.className,
+      color: row.color,
+    });
+  });
+  return list;
+}
+
 function rltLookup(entry) {
-  if (!rltConfig || !Array.isArray(rltConfig.drivers) || !rltConfig.drivers.length) return null;
+  if (!rltConfig || (!rltConfig.drivers?.length && !rltConfig.standingsRows?.length)) return null;
   const raw = entry.name || "";
   if (rltLookupCache.has(raw)) return rltLookupCache.get(raw);
 
@@ -184,13 +244,24 @@ function rltLookup(entry) {
     return null;
   }
 
+  const pool = rltDriverPool();
   let best = null;
   let bestScore = 0;
   for (const target of candidates) {
     const targetTokens = target.split(" ").filter(Boolean);
     const targetLast = targetTokens[targetTokens.length - 1] || "";
-    for (const d of rltConfig.drivers) {
-      for (const al of d.aliases || []) {
+    const ini = targetTokens.length >= 1 ? targetTokens[0].replace(/\./g, "") : "";
+    const hasIni = ini.length === 1;
+
+    for (const d of pool) {
+      const extra = [];
+      if (d.driverName) extra.push(normalizeDriverName(d.driverName));
+      if (d.displayName) extra.push(normalizeDriverName(d.displayName));
+      if (d.firstName || d.lastName) extra.push(normalizeDriverName(`${d.firstName || ""} ${d.lastName || ""}`));
+      if (d.lastName) extra.push(normalizeDriverName(d.lastName));
+
+      for (const al of [...(d.aliases || []), ...extra]) {
+        if (!al) continue;
         const score = scoreAlias(target, targetTokens, targetLast, al);
         if (score > bestScore) {
           bestScore = score;
@@ -198,20 +269,27 @@ function rltLookup(entry) {
         }
         if (score >= 1) break;
       }
-      if (d.firstName) {
-        const fn = normalizeDriverName(`${d.firstName} ${d.lastName || ""}`);
-        const score = scoreAlias(target, targetTokens, targetLast, fn);
-        if (score > bestScore) {
-          bestScore = score;
-          best = d;
-        }
-      }
+
       if (d.lastName) {
         const ln = normalizeDriverName(d.lastName);
+        const fn = d.firstName ? normalizeDriverName(d.firstName) : "";
         if (targetLast === ln && ln.length >= 3) {
-          const score = targetTokens.length === 1 ? 0.99 : 0.985;
+          let score = targetTokens.length === 1 ? 0.99 : 0.985;
+          if (hasIni && fn && fn.startsWith(ini)) score = 0.995;
+          else if (hasIni) score = Math.max(score, 0.99);
+          if (targetTokens.length >= 2 && fn && targetTokens[0] === fn) score = 1;
           if (score > bestScore) {
             bestScore = score;
+            best = d;
+          }
+        }
+      }
+      if (d.firstName && d.lastName && targetTokens.length >= 2) {
+        const fn = normalizeDriverName(d.firstName);
+        const ln = normalizeDriverName(d.lastName);
+        if (fn && ln && targetTokens[0] === fn && targetLast === ln) {
+          if (1 > bestScore) {
+            bestScore = 1;
             best = d;
           }
         }
@@ -573,6 +651,12 @@ function connect() {
       rltConfig = msg.data || null;
       rltLookupCache.clear();
       if (latestStandings.length) render(latestStandings);
+    } else if (msg.type === "assetsConfig") {
+      const d = msg.data || {};
+      logoBaseUrl = d.baseUrl || "";
+      logoCacheBust = d.cacheBust || "";
+      teamLogoFailCache.clear();
+      if (latestStandings.length) render(latestStandings);
     }
   });
   socket.addEventListener("close", () => setTimeout(connect, 2000));
@@ -857,13 +941,27 @@ function carLogoFromTeam(teamName) {
   return null;
 }
 
+let logoBaseUrl = "";
+let logoCacheBust = "";
+
+function logoUrl(relPath) {
+  if (!relPath) return null;
+  const rel = String(relPath).replace(/^\/+/, "");
+  const base = (logoBaseUrl || "assets").replace(/\/+$/, "");
+  let url = `${base}/${rel}`;
+  if (logoCacheBust) {
+    url += (url.includes("?") ? "&" : "?") + "v=" + encodeURIComponent(logoCacheBust);
+  }
+  return url;
+}
+
 function resolveLogoSrc(teamName, carName) {
   const carFile = carLogo(carName) || carLogoFromTeam(teamName);
   const teamFile = teamLogoFile(teamName);
-  const teamSrc = teamFile ? `assets/teams/${teamFile}` : null;
-  const carSrc = carFile ? `assets/cars/${carFile}` : null;
+  const teamSrc = teamFile ? logoUrl(`teams/${teamFile}`) : null;
+  const carSrc = carFile ? logoUrl(`cars/${carFile}`) : null;
 
-  if (teamSrc && !teamLogoFailCache.has(teamSrc)) {
+  if (teamSrc && !teamLogoFailCache.has(teamSrc.split("?")[0])) {
     return { src: teamSrc, fallback: carSrc };
   }
   if (carSrc) return { src: carSrc, fallback: null };
@@ -888,7 +986,7 @@ function applyLogo(img, teamName, carName) {
     img.dataset.logoSrc = res.src;
   };
   img.onerror = () => {
-    if (res.src && res.src.indexOf("/teams/") !== -1) teamLogoFailCache.add(res.src);
+    if (res.src && res.src.indexOf("/teams/") !== -1) teamLogoFailCache.add(res.src.split("?")[0]);
     if (res.fallback && img.dataset.logoTried !== res.fallback) {
       img.dataset.logoTried = res.fallback;
       img.src = res.fallback;
@@ -1766,7 +1864,7 @@ function renderStandings(standings) {
       } else {
         const deltaRank = Number(rankDelta.get(row)) || 0;
         const rd = formatPosDelta(deltaRank);
-        text = `${safeTotal}(+${addPts})${rd.text !== "=" ? rd.text : ""}`;
+        text = `${safeTotal}(+${addPts})${rd.text !== "=" ? " " + rd.text : ""}`;
         cls = rd.cls || "";
       }
     } else if (colMode === "Gap líder") {

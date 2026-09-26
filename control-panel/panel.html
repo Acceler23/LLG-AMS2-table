@@ -53,10 +53,25 @@
       <button onclick="reloadSeasons()">Recarregar</button>
     </div>
     <div id="rltClasses"></div>
+    <div class="muted" style="margin-top:10px">Multiseason (track stats)</div>
+    <div class="row">
+      <select id="rltMultiseason"><option value="">— default —</option></select>
+      <button onclick="applyMultiseason()">Aplicar</button>
+      <button onclick="reloadMultiseasons()">Recarregar</button>
+    </div>
+    <div class="muted">Overlay: /overlay/track-stats.html · assets/tracks/logos + layouts (slug.png)</div>
     <div class="muted" id="rltStatus"></div>
     <div id="rltLog"></div>
+    <h3 style="margin-top:16px">Logos (GitHub)</h3>
+    <div class="muted">Repo com pastas teams/ e cars/. Aceita link do GitHub ou raw. Vazio = assets local.</div>
+    <div class="row">
+      <input id="assetsBaseUrl" type="text" placeholder="https://github.com/user/repo ou .../tree/main/assets" />
+      <button onclick="saveAssetsBase()">Salvar</button>
+      <button onclick="resetAssetsBase()">Local</button>
+    </div>
+    <div class="muted" id="assetsBaseStatus"></div>
     <h3 style="margin-top:16px">Logos de equipe</h3>
-    <div class="muted">Arquivo em overlay/assets/teams/ (ex: minha_equipe.png). Vazio = padrão (slug). Fallback: logo do carro.</div>
+    <div class="muted">Arquivo em teams/ (ex: minha_equipe.png). Vazio = padrão (slug). Fallback: cars/.</div>
     <div id="teamLogos"></div>
   </div>
 
