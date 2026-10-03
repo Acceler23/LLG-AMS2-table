@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <title>Driver Card</title>
+  <link rel="stylesheet" href="driver-card.css" />
+</head>
+<body>
+  <div id="card" class="hidden">
+    <div class="pos-col">
+      <span class="pos-num" id="posClass">—</span>
+      <span class="pos-overall" id="posOverall">—</span>
+    </div>
+    <div class="main">
+      <div class="class-bar" id="classBar">
+        <img class="bg-logo" id="bgLogo" alt="" />
+        <span class="class-name" id="className"></span>
+      </div>
+      <div class="identity">
+        <div class="num" id="raceNum"></div>
+        <div class="names">
+          <div class="driver" id="driverName"></div>
+          <div class="team" id="teamName"></div>
+        </div>
+      </div>
+      <div class="stats" id="stats"></div>
+    </div>
+  </div>
+  <script src="drivers-config.js"></script>
+  <script src="driver-card.js"></script>
+</body>
+</html>

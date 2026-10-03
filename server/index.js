@@ -77,10 +77,6 @@ wss.onConnect((socket) => {
   if (payload && socket.readyState === 1) {
     socket.send(JSON.stringify({ type: "rltConfig", data: payload }));
   }
-  const trackPayload = rlt.getTrackStats();
-  if (trackPayload && socket.readyState === 1) {
-    socket.send(JSON.stringify({ type: "trackStats", data: trackPayload }));
-  }
   if (socket.readyState === 1) {
     socket.send(JSON.stringify({ type: "assetsConfig", data: assetsConfigPayload() }));
   }
@@ -251,50 +247,9 @@ app.post("/api/rlt/season", async (req, res) => {
   }
 });
 
-app.get("/api/rlt/multiseasons", async (req, res) => {
-  try {
-    if (!rlt.hasKey()) return res.status(401).json({ ok: false, error: "API key ausente" });
-    const list = await rlt.fetchMultiseasons();
-    res.json({
-      ok: true,
-      multiseasons: (list || []).map((m) => ({
-        key: m.key,
-        name: m.name,
-        isDefault: !!m.isDefault,
-        seasonIds: m.seasonIds || [],
-      })),
-      selectedKey: rlt.getStatus().selectedMultiseasonKey,
-    });
-  } catch (e) {
-    console.error("[RLT] /api/rlt/multiseasons", e.message);
-    res.status(e.status || 500).json({ ok: false, error: e.message });
-  }
-});
-
-app.post("/api/rlt/multiseason", async (req, res) => {
-  try {
-    if (!rlt.hasKey()) return res.status(401).json({ ok: false, error: "API key ausente" });
-    const key = req.body && req.body.key;
-    const stats = await rlt.fetchMultiseasonStats(key || null);
-    const payload = rlt.getTrackStats();
-    wss.broadcast({ type: "trackStats", data: payload });
-    res.json({ ok: true, payload, status: rlt.getStatus() });
-  } catch (e) {
-    console.error("[RLT] /api/rlt/multiseason", e.message);
-    res.status(e.status || 500).json({ ok: false, error: e.message });
-  }
-});
-
-app.get("/api/rlt/track-stats", (req, res) => {
-  const payload = rlt.getTrackStats();
-  if (!payload) return res.status(404).json({ ok: false, error: "Sem dados de multiseason" });
-  res.json({ ok: true, payload });
-});
-
 app.post("/api/rlt/clear", (req, res) => {
   rlt.setApiKey("");
   wss.broadcast({ type: "rltConfig", data: null });
-  wss.broadcast({ type: "trackStats", data: null });
   res.json({ ok: true });
 });
 
@@ -315,7 +270,7 @@ connectObs(wss);
 
 server.listen(HTTP_PORT, async () => {
   console.log(`Tabela de tempos em      http://localhost:${HTTP_PORT}/overlay/timing-table.html`);
-  console.log(`Track stats overlay em   http://localhost:${HTTP_PORT}/overlay/track-stats.html`);
+  console.log(`Driver card overlay em   http://localhost:${HTTP_PORT}/overlay/driver-card.html`);
   console.log(`Painel de controle em    http://localhost:${HTTP_PORT}/panel/panel.html`);
   console.log(`Aguardando o listener.ps1 (rode-o em outra janela) para receber dados do AMS2`);
   if (rlt.hasKey()) {

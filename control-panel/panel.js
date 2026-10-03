@@ -78,7 +78,6 @@ async function saveKey() {
     });
     log(`League ok. Seasons ativas: ${(body.seasons || []).length}`);
     renderSeasons(body.seasons || []);
-    reloadMultiseasons();
     document.getElementById("rltStatus").textContent = JSON.stringify(body.status || {}, null, 0);
   } catch (e) {
     log("ERRO key: " + e.message);
@@ -164,54 +163,14 @@ async function applySeason() {
   }
 }
 
-function renderMultiseasons(list, selectedKey) {
-  const sel = document.getElementById("rltMultiseason");
-  if (!sel) return;
-  const cur = selectedKey != null ? selectedKey : sel.value;
-  sel.innerHTML = '<option value="">— default —</option>';
-  (list || []).forEach((m) => {
-    const opt = document.createElement("option");
-    opt.value = m.key || "";
-    const n = (m.seasonIds || []).length;
-    opt.textContent = `${m.name || m.key || "?"}${m.isDefault ? " ★" : ""} (${n} seasons)`;
-    sel.appendChild(opt);
-  });
-  if (cur) sel.value = cur;
-}
 
-async function reloadMultiseasons() {
-  try {
-    log("Recarregando multiseasons…");
-    const body = await api("/api/rlt/multiseasons");
-    log(`Multiseasons: ${(body.multiseasons || []).length}`);
-    renderMultiseasons(body.multiseasons || [], body.selectedKey);
-  } catch (e) {
-    log("ERRO multiseasons: " + e.message);
-  }
-}
 
-async function applyMultiseason() {
-  const key = document.getElementById("rltMultiseason").value || null;
-  try {
-    log(key ? `Aplicando multiseason ${key}…` : "Aplicando multiseason default…");
-    const body = await api("/api/rlt/multiseason", {
-      method: "POST",
-      body: JSON.stringify({ key }),
-    });
-    const tracks = (body.payload && body.payload.trackStats) || [];
-    log(`OK — tracks=${tracks.length}`);
-    document.getElementById("rltStatus").textContent = JSON.stringify(body.status || {}, null, 0);
-  } catch (e) {
-    log("ERRO multiseason: " + e.message);
-  }
-}
 
 async function clearRlt() {
   try {
     await api("/api/rlt/clear", { method: "POST", body: "{}" });
     document.getElementById("rltKey").value = "";
     document.getElementById("rltSeason").innerHTML = '<option value="">— só dados do jogo (sem season) —</option>';
-    document.getElementById("rltMultiseason").innerHTML = '<option value="">— default —</option>';
     document.getElementById("rltClasses").innerHTML = "";
     document.getElementById("rltStatus").textContent = "";
     renderTeamLogos([]);
@@ -263,8 +222,7 @@ async function refreshStatus() {
     document.getElementById("rltStatus").textContent = JSON.stringify(body, null, 0);
     if (body.hasKey) {
       reloadSeasons();
-      reloadMultiseasons();
-    }
+      }
   } catch (_) {}
   loadAssetsBase();
 }

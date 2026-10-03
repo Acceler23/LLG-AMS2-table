@@ -17,9 +17,6 @@ let cache = {
   classes: [],
   drivers: [],
   standingsRows: [],
-  multiseasons: null,
-  multiseasonStats: null,
-  selectedMultiseasonKey: null,
 };
 
 function setApiKey(key) {
@@ -32,9 +29,6 @@ function setApiKey(key) {
     classes: [],
     drivers: [],
     standingsRows: [],
-    multiseasons: null,
-    multiseasonStats: null,
-    selectedMultiseasonKey: null,
   };
   selectedSeasonId = null;
   stopRefresh();
@@ -337,6 +331,7 @@ function buildDrivers(standingsData, classes) {
       inGameName: inGamePrimary ? String(inGamePrimary) : null,
       description: description || null,
       teamName: d.teamName || di.teamName || null,
+      raceNumber: di.raceNumber || di.RaceNumber || d.raceNumber || null,
       aliases: Array.from(aliases),
     });
   });
@@ -439,6 +434,7 @@ function buildStandingsRows(standingsData, classes) {
       positionChange: d.positionChange != null ? d.positionChange : null,
       classPositionChange: classRow && classRow.positionChange != null ? classRow.positionChange : null,
       teamName: d.teamName || null,
+      raceNumber: di.raceNumber || di.RaceNumber || d.raceNumber || null,
       classUniqueName: (cls && cls.uniqueName) || (classInfo && classInfo.uniqueName) || "—",
       className: (cls && cls.name) || (classInfo && classInfo.name) || "—",
       color,
@@ -555,45 +551,15 @@ function getStatus() {
   return {
     hasKey: hasKey(),
     selectedSeasonId,
-    selectedMultiseasonKey: cache.selectedMultiseasonKey,
     classes: cache.classes.length,
     driversMapped: cache.drivers.length,
-    tracks: (cache.multiseasonStats && cache.multiseasonStats.trackStats && cache.multiseasonStats.trackStats.length) || 0,
     leagueName: cache.league && cache.league.leagueInfo && cache.league.leagueInfo.leagueName,
   };
 }
 
-async function fetchMultiseasons() {
-  const data = unwrap(await rltFetch("/api/public/v1/multiseasons"));
-  const list = (data && data.multiSeasons) || (data && data.items) || (Array.isArray(data) ? data : []) || [];
-  cache.multiseasons = list;
-  return list;
-}
 
-async function fetchMultiseasonStats(key) {
-  const path = key
-    ? `/api/public/v1/multiseasons/${encodeURIComponent(key)}/statistics?includeTrackStats=true&includeTeamStats=false`
-    : `/api/public/v1/multiseasons/statistics?includeTrackStats=true&includeTeamStats=false`;
-  const data = unwrap(await rltFetch(path));
-  cache.multiseasonStats = data;
-  cache.selectedMultiseasonKey = key || (data && data.key) || null;
-  return data;
-}
 
-function getMultiseasons() {
-  return cache.multiseasons || [];
-}
 
-function getTrackStats() {
-  const stats = cache.multiseasonStats;
-  if (!stats) return null;
-  return {
-    key: cache.selectedMultiseasonKey || stats.key || null,
-    multiSeasonInfo: stats.multiSeasonInfo || null,
-    seasons: stats.seasons || [],
-    trackStats: stats.trackStats || [],
-  };
-}
 
 module.exports = {
   setApiKey,
@@ -610,8 +576,4 @@ module.exports = {
   getActiveSeasons,
   getOverlayPayload,
   getStatus,
-  fetchMultiseasons,
-  fetchMultiseasonStats,
-  getMultiseasons,
-  getTrackStats,
 };
