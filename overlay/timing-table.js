@@ -215,6 +215,7 @@ function rltDriverPool() {
     add({
       displayName: row.displayName,
       driverName: row.driverName,
+      inGameName: row.inGameName,
       firstName: row.firstName,
       lastName: row.lastName,
       teamName: row.teamName,
@@ -257,6 +258,7 @@ function rltLookup(entry) {
       const extra = [];
       if (d.driverName) extra.push(normalizeDriverName(d.driverName));
       if (d.displayName) extra.push(normalizeDriverName(d.displayName));
+      if (d.inGameName) extra.push(normalizeDriverName(d.inGameName));
       if (d.firstName || d.lastName) extra.push(normalizeDriverName(`${d.firstName || ""} ${d.lastName || ""}`));
       if (d.lastName) extra.push(normalizeDriverName(d.lastName));
 
@@ -304,11 +306,17 @@ function rltLookup(entry) {
 }
 
 function rltDisplayName(entry) {
+  const fallback = (entry && entry.name) || "";
   const info = rltLookup(entry);
-  if (!info) return entry.name;
-  if (info.firstName && info.lastName) return `${info.firstName} ${info.lastName}`.trim();
-  if (info.displayName) return info.displayName;
-  return entry.name;
+  if (!info) return fallback;
+  if (info.firstName && info.lastName) {
+    const full = `${info.firstName} ${info.lastName}`.trim();
+    if (full) return full;
+  }
+  if (info.displayName && String(info.displayName).trim()) return info.displayName;
+  if (info.inGameName && String(info.inGameName).trim()) return info.inGameName;
+  if (info.driverName && String(info.driverName).trim()) return info.driverName;
+  return fallback;
 }
 
 function rltEnabled() {
@@ -1722,12 +1730,13 @@ function renderStandings(standings) {
   const timerEl = document.getElementById("sessionTimer");
 
   const seasonName = (rltConfig && rltConfig.seasonName) || "STANDINGS";
-  sessionLabel.textContent = "STANDINGS";
+  sessionLabel.textContent = "PONTUAÇÃO";
   timerEl.textContent = seasonName;
   timerEl.style.fontSize = seasonName.length > 22 ? "22px" : "26px";
   pageLabel.textContent = currentPageLabel(standings);
   const colMode = STANDINGS_COLUMN_MODES[standingsColumnIndex];
   rightLabel.textContent = colMode;
+  document.getElementById("timing-table").classList.toggle("wide-right", colMode === "Pts proj.");
 
   const classMode = currentPageMode(standings) !== "Geral";
   const liveMap = liveRacePosByDriver(standings, classMode);
@@ -1905,6 +1914,7 @@ function render(standings) {
     return;
   }
   document.getElementById("rightColumnLabel").textContent = RIGHT_COLUMN_MODES[rightColumnIndex];
+  document.getElementById("timing-table").classList.remove("wide-right");
   document.getElementById("pageLabel").textContent = currentPageLabel(standings);
 
   ensureBaselines(standings, latestSessionLabel);

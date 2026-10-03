@@ -122,6 +122,48 @@ function pushAlias(set, value) {
   if (n) set.add(n);
 }
 
+function addNameParts(set, value) {
+  if (value == null) return;
+  if (Array.isArray(value)) {
+    value.forEach((v) => addNameParts(set, v));
+    return;
+  }
+  if (typeof value === "object") {
+    const n =
+      value.name ||
+      value.Name ||
+      value.inGameName ||
+      value.InGameName ||
+      value.displayName ||
+      value.DisplayName ||
+      null;
+    if (n) addNameParts(set, n);
+    return;
+  }
+  String(value)
+    .split(/[,;|/\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .forEach((s) => {
+      pushAlias(set, s);
+      String(s)
+        .split(/[|\/\\]+/)
+        .map((p) => p.trim())
+        .filter(Boolean)
+        .forEach((p) => pushAlias(set, p));
+    });
+}
+
+function collectInGameNames(d, di) {
+  const set = new Set();
+  addNameParts(set, d && (d.inGameName || d.InGameName));
+  addNameParts(set, d && (d.inGameNames || d.InGameNames));
+  addNameParts(set, di && (di.inGameName || di.InGameName));
+  addNameParts(set, di && (di.inGameNames || di.InGameNames));
+  addNameParts(set, di && (di.gameNames || di.names));
+  return Array.from(set);
+}
+
 function collectDriverStandings(standingsData) {
   const out = [];
   const seen = new Set();
@@ -247,38 +289,33 @@ function buildDrivers(standingsData, classes) {
 
     const aliases = new Set();
     const description = di.description || di.Description || d.description || d.Description || null;
-    function addNameParts(value) {
-      if (value == null) return;
-      if (Array.isArray(value)) {
-        value.forEach(addNameParts);
-        return;
-      }
-      String(value)
-        .split(/[,;|/\n]+/)
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .forEach((s) => {
-          pushAlias(aliases, s);
-          String(s)
-            .split(/[|\/\\]+/)
-            .map((p) => p.trim())
-            .filter(Boolean)
-            .forEach((p) => pushAlias(aliases, p));
-        });
-    }
-    addNameParts(description);
-    addNameParts(di.inGameNames || di.inGameName || di.gameNames || di.names);
-    addNameParts(d.driverName);
-    addNameParts(di.uniqueName);
-    addNameParts(di.displayName);
-    addNameParts(di.realName);
-    addNameParts(di.shortName);
-    addNameParts(firstName);
-    addNameParts(lastName);
+    addNameParts(aliases, description);
+    collectInGameNames(d, di).forEach((n) => pushAlias(aliases, n));
+    addNameParts(aliases, d.driverName || d.DriverName);
+    addNameParts(aliases, d.inGameName || d.InGameName);
+    addNameParts(aliases, di.uniqueName);
+    addNameParts(aliases, di.displayName || di.DisplayName);
+    addNameParts(aliases, di.realName || di.RealName);
+    addNameParts(aliases, di.shortName || di.ShortName);
+    addNameParts(aliases, firstName);
+    addNameParts(aliases, lastName);
     if (firstName && lastName) {
       pushAlias(aliases, `${firstName} ${lastName}`);
       pushAlias(aliases, `${lastName} ${firstName}`);
     }
+    const inGamePrimary =
+      d.inGameName ||
+      d.InGameName ||
+      (Array.isArray(d.inGameNames) && d.inGameNames[0] && (d.inGameNames[0].name || d.inGameNames[0])) ||
+      (Array.isArray(di.inGameNames) && di.inGameNames[0] && (di.inGameNames[0].name || di.inGameNames[0])) ||
+      di.inGameName ||
+      null;
+    const displayResolved =
+      (displayFull && String(displayFull).trim()) ||
+      (inGamePrimary && String(inGamePrimary).trim()) ||
+      d.driverName ||
+      d.DriverName ||
+      null;
 
     let color = (cls && cls.color) || (info && info.color) || null;
     if (color) {
@@ -296,7 +333,8 @@ function buildDrivers(standingsData, classes) {
       color,
       firstName,
       lastName,
-      displayName: displayFull,
+      displayName: displayResolved,
+      inGameName: inGamePrimary ? String(inGamePrimary) : null,
       description: description || null,
       teamName: d.teamName || di.teamName || null,
       aliases: Array.from(aliases),
@@ -353,31 +391,30 @@ function buildStandingsRows(standingsData, classes) {
     }
     const description = di.description || d.description || null;
     const aliases = new Set();
-    function addNameParts(value) {
-      if (value == null) return;
-      if (Array.isArray(value)) {
-        value.forEach(addNameParts);
-        return;
-      }
-      String(value)
-        .split(/[,;|/\n]+/)
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .forEach((s) => {
-          pushAlias(aliases, s);
-          String(s)
-            .split(/[|\/\\]+/)
-            .map((p) => p.trim())
-            .filter(Boolean)
-            .forEach((p) => pushAlias(aliases, p));
-        });
+    addNameParts(aliases, description);
+    collectInGameNames(d, di).forEach((n) => pushAlias(aliases, n));
+    addNameParts(aliases, d.driverName || d.DriverName);
+    addNameParts(aliases, d.inGameName || d.InGameName);
+    addNameParts(aliases, displayName);
+    addNameParts(aliases, firstName);
+    addNameParts(aliases, lastName);
+    if (firstName && lastName) {
+      pushAlias(aliases, `${firstName} ${lastName}`);
+      pushAlias(aliases, `${lastName} ${firstName}`);
     }
-    addNameParts(description);
-    addNameParts(di.inGameNames || di.inGameName || di.gameNames || di.names);
-    addNameParts(d.driverName);
-    addNameParts(displayName);
-    addNameParts(firstName);
-    addNameParts(lastName);
+    const inGamePrimary =
+      d.inGameName ||
+      d.InGameName ||
+      (Array.isArray(d.inGameNames) && d.inGameNames[0] && (d.inGameNames[0].name || d.inGameNames[0])) ||
+      (Array.isArray(di.inGameNames) && di.inGameNames[0] && (di.inGameNames[0].name || di.inGameNames[0])) ||
+      di.inGameName ||
+      null;
+    const displayResolved =
+      (displayName && displayName !== "—" && String(displayName).trim()) ||
+      (inGamePrimary && String(inGamePrimary).trim()) ||
+      d.driverName ||
+      d.DriverName ||
+      "—";
     const ptsOverall = parsePoints(d.points);
     const ptsClass = classRow ? parsePoints(classRow.points) : ptsOverall;
     const classPos =
@@ -389,7 +426,8 @@ function buildStandingsRows(standingsData, classes) {
       position: d.position != null ? d.position : 999,
       classPosition: classPos,
       driverName: d.driverName,
-      displayName,
+      displayName: displayResolved,
+      inGameName: inGamePrimary ? String(inGamePrimary) : null,
       firstName,
       lastName,
       points: ptsOverall.text,

@@ -57,7 +57,7 @@ html, body {
 }
 
 .title-text {
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 800;
   letter-spacing: 1px;
   line-height: 1.1;
@@ -120,7 +120,7 @@ html, body {
 
 .row {
   display: grid;
-  grid-template-columns: 46px 1fr 168px;
+  grid-template-columns: 46px 1fr 100px;
   align-items: stretch;
   min-height: 44px;
   font-size: 20px;
@@ -129,6 +129,10 @@ html, body {
   border-radius: 0 0 0 10px;
   overflow: hidden;
   margin-left: 5px;
+}
+
+#timing-table.wide-right .row {
+  grid-template-columns: 46px 1fr 150px;
 }
 
 .row.player {
@@ -218,7 +222,7 @@ html, body {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 20px;
+  font-size: 22px;
   white-space: nowrap;
 }
 
@@ -315,7 +319,7 @@ html, body {
 
 .row.fastest .right-value,
 .right-value.fastest-gap {
-  color: #ff00ff;
+  color: #d24bff;
   font-weight: 700;
 }
 
