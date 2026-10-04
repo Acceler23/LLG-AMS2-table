@@ -64,16 +64,14 @@ html, body {
   align-items: center;
 }
 
-.class-bar .bg-logo {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  height: 56px;
+/* Logo da equipe: fica na frente do nome do piloto, em destaque */
+.identity .team-logo {
+  height: 48px;
   width: auto;
-  max-width: 120px;
+  max-width: 96px;
   object-fit: contain;
-  pointer-events: none;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.45));
 }
 
 .class-name {
@@ -100,6 +98,8 @@ html, body {
   color: #7ec8ff;
   width: 50px;
   line-height: 1;
+  text-align: center; /* numero centralizado no espaco entre a posicao e o nome */
+  flex-shrink: 0;
 }
 
 .names {

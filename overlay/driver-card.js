@@ -10,7 +10,10 @@ const STANDINGS_COLUMN_MODES = ["Pts", "Pts proj.", "Gap líder"];
 let stablePlayerName = null;
 let pendingPlayerName = null;
 let pendingPlayerSince = 0;
-const PLAYER_STABLE_MS = 800;
+// Troca de piloto em foco: vale assim que duas leituras seguidas do jogo
+// concordam (~0,13 s cada). Uma leitura isolada e ignorada, para a camera
+// passando por outro carro nao fazer o destaque piscar.
+const PLAYER_STABLE_MS = 100;
 
 // Fonte online primeiro, pasta local overlay/assets como reserva.
 const logoLoader = LLGLogos.createLoader("assets");
@@ -44,15 +47,6 @@ function rltLookup(entry) {
   return rltMatcher.lookup(entry.name || "");
 }
 
-function teamSlug(name) {
-  return String(name || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_|_$/g, "");
-}
-
 function ordinal(n) {
   const x = Number(n);
   if (!Number.isFinite(x) || x <= 0) return "";
@@ -73,35 +67,11 @@ function formatTime(ms) {
   return s.toFixed(3);
 }
 
-function manufacturerName(carName) {
-  return (carName || "").split(" ")[0];
-}
-
-function carLogo(carName) {
-  if (typeof CAR_LOGOS === "undefined") return undefined;
-  return CAR_LOGOS[manufacturerName(carName)] || CAR_LOGOS[carName];
-}
-
-function carLogoFromTeam(teamName) {
-  if (typeof CAR_LOGOS === "undefined" || !teamName) return null;
-  const slug = teamSlug(teamName);
-  for (const key of Object.keys(CAR_LOGOS)) {
-    if (teamSlug(key) === slug) return CAR_LOGOS[key];
-  }
-  return null;
-}
-
-function teamLogoFile(teamName) {
-  if (!teamName) return null;
-  if (teamLogoOverrides[teamName]) return teamLogoOverrides[teamName];
-  return `${teamSlug(teamName)}.png`;
-}
-
+// Mesmas regras de logo da tabela (shared/display.js), incluindo a lista
+// TEAM_LOGO_OVERRIDES do drivers-config.js.
 function setBgLogo(img, teamName, carName) {
   if (!img) return;
-  const carFile = carLogo(carName) || carLogoFromTeam(teamName);
-  const teamFile = teamLogoFile(teamName);
-  logoLoader.load(img, [teamFile ? `teams/${teamFile}` : null, carFile ? `cars/${carFile}` : null]);
+  logoLoader.load(img, LLGDisplay.logoPaths(teamName, carName, teamLogoOverrides));
 }
 
 function rltDisplayName(entry) {
@@ -123,12 +93,57 @@ function rltTeamName(entry) {
   return entry.teamName || entry.carName || "";
 }
 
-function rltClassName(entry) {
+// Nome completo da equipe (so para exibir; os logos usam o nome curto).
+function rltTeamFullName(entry) {
   const info = rltLookup(entry);
-  if (info && info.name && info.name !== "—") return info.name;
-  // classe dividida por modelo: o nome do grupo e o carro
-  if (grouper.isSplitByCar(latestStandings)) return entry.carName || entry.carClass || "";
-  return entry.carClass || entry.className || "";
+  return (info && info.teamFullName) || rltTeamName(entry);
+}
+
+const POS_DEFAULT_BG = "";
+
+// Coluna da posicao: degrade da cor primaria para a secundaria da equipe.
+// Cada numero recebe preto ou branco conforme a cor do degrade na altura em
+// que ele esta, mais um contorno na cor oposta, para nunca sumir no fundo.
+function paintPositionColumn(entry) {
+  const col = document.querySelector(".pos-col");
+  if (!col) return;
+  const info = rltLookup(entry);
+  const a = info && LLGColors.toRgb(info.teamPrimaryColor);
+  const b = (info && LLGColors.toRgb(info.teamSecondaryColor)) || a;
+  const targets = [
+    [document.getElementById("posClass"), 0.4],
+    [document.getElementById("posOverall"), 0.72],
+  ];
+  if (!a) {
+    // sem equipe no RLT: volta para o azul padrao do CSS
+    col.style.background = POS_DEFAULT_BG;
+    targets.forEach(([el]) => {
+      if (!el) return;
+      el.style.color = "";
+      el.style.textShadow = "";
+    });
+    return;
+  }
+  col.style.background = `linear-gradient(180deg, rgb(${a.join(",")}) 0%, rgb(${b.join(",")}) 100%)`;
+  targets.forEach(([el, at]) => {
+    if (!el) return;
+    const fg = LLGColors.readableOn(LLGColors.mix(a, b, at));
+    const outline = fg === "#000000" ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.85)";
+    el.style.color = fg;
+    el.style.textShadow = `0 0 2px ${outline}, 0 0 2px ${outline}, 0 0 4px ${outline}`;
+  });
+}
+
+// Nome da classe, igual ao cabecalho da tabela: classe do RLT quando ha
+// temporada, modelo do carro em classe dividida por carro, senao a classe do
+// jogo ja formatada (CLASS_NAME_OVERRIDES, sem sufixos tecnicos).
+function classLabel(entry) {
+  const key = grouper.key(entry, latestStandings);
+  if (rltEnabled()) {
+    const c = rltConfig.classes.find((x) => x.uniqueName === key || x.name === key);
+    if (c) return LLGDisplay.formatClassName(c.name || c.uniqueName);
+  }
+  return LLGDisplay.formatClassName(key);
 }
 
 function rltRaceNumber(entry) {
@@ -137,13 +152,9 @@ function rltRaceNumber(entry) {
   return "";
 }
 
-function classColor(key) {
-  if (rltConfig && rltConfig.classes) {
-    const c = rltConfig.classes.find((x) => x.uniqueName === key || x.name === key);
-    if (c && c.color) return c.color;
-  }
-  const info = null;
-  return "#0e42a5";
+// Mesma cor de classe da tabela (RLT, CLASS_COLORS ou cor derivada do nome).
+function classColor(entry) {
+  return LLGDisplay.classColor(grouper.key(entry, latestStandings), rltEnabled() ? rltConfig.classes : null);
 }
 
 function updateStablePlayer(standings) {
@@ -256,16 +267,15 @@ function render() {
   document.getElementById("posClass").textContent = classPos || "—";
   document.getElementById("posOverall").textContent = overall || "—";
 
-  const cls = rltClassName(entry);
+  // nome e cor da classe pelas mesmas regras da tabela
   const classBar = document.getElementById("classBar");
-  document.getElementById("className").textContent = cls || "—";
-  const info = rltLookup(entry);
-  const color = (info && info.color) || "#0e42a5";
-  classBar.style.background = color;
+  document.getElementById("className").textContent = classLabel(entry) || "—";
+  classBar.style.background = classColor(entry);
 
   const team = rltTeamName(entry);
   document.getElementById("driverName").textContent = rltDisplayName(entry) || entry.name || "—";
-  document.getElementById("teamName").textContent = team || "—";
+  document.getElementById("teamName").textContent = rltTeamFullName(entry) || "—";
+  paintPositionColumn(entry);
   document.getElementById("raceNum").textContent = rltRaceNumber(entry);
 
   setBgLogo(document.getElementById("bgLogo"), team, entry.carName);

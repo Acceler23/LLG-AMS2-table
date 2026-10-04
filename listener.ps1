@@ -5,7 +5,7 @@
 # -- sem precisar escrever C# ou usar addons nativos.
 #
 # Os offsets abaixo vem da struct oficial (SharedMemory.h) que a Reiza
-# distribui junto do jogo. Le a cada 200ms e manda o resultado (em JSON) pro
+# distribui junto do jogo. Le a cada ~130ms e manda o resultado (em JSON) pro
 # servidor Node via TCP, com um prefixo de 4 bytes indicando o tamanho.
 #
 # A cada ciclo a Shared Memory inteira e copiada para um buffer local, e a
@@ -16,7 +16,9 @@
 param(
     [string]$MapName = '$pcars2$',
     [string]$BridgeHost = "127.0.0.1",
-    [int]$BridgePort = 5607
+    [int]$BridgePort = 5607,
+    # pausa entre leituras; cada ciclo leva essa pausa + ~30 ms de trabalho
+    [int]$IntervalMs = 100
 )
 
 $mapName = $MapName
@@ -483,7 +485,7 @@ while ($true) {
                 Write-Host "Sem dados agora (jogo fechado ou no menu?):" $_.Exception.Message
             }
 
-            Start-Sleep -Milliseconds 200
+            Start-Sleep -Milliseconds $IntervalMs
         }
     }
     catch {

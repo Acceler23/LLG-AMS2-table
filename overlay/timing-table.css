@@ -9,6 +9,7 @@ html, body {
 #timing-table {
   --table-opacity: 1;
   --row-opacity: 1;
+  --team-tint: 0.5; /* intensidade do degrade da equipe, 0 a 1 (slider do painel) */
   position: absolute;
   width: 500px;
   max-height: 1080px;
@@ -98,8 +99,16 @@ html, body {
   background: rgba(0,0,0,0.35);
   color: #fff;
   font-weight: 700;
-  font-size: 14px;
-  padding: 6px 16px;
+  font-size: 20px;
+  /* mesma altura de uma linha de piloto (43 + 3 de borda = 46 px): assim a
+     tabela cheia tem a mesma altura em Geral e em Multiclasse. Se mudar,
+     ajuste CLASS_HDR_H em timing-table.js. */
+  box-sizing: border-box;
+  height: 46px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   letter-spacing: 0.5px;
   border-left: 4px solid transparent;
   text-align: center;
@@ -135,6 +144,22 @@ html, body {
 
 #timing-table.wide-right .row {
   grid-template-columns: 46px 1fr 150px;
+}
+
+/* Degrade suave com a cor principal da equipe, a partir da caixa da posicao.
+   Nao se aplica a linha quadriculada (chegada) nem a de bandeira amarela. */
+.row.has-team:not(.finished):not(.yellow-flag) {
+  background-image: linear-gradient(
+    90deg,
+    rgba(var(--team-rgb), calc(var(--team-tint) * 0.7)) 46px,
+    rgba(var(--team-rgb), calc(var(--team-tint) * 0.3)) 40%,
+    rgba(var(--team-rgb), 0) 85%
+  );
+}
+
+/* equipes de cor clara: o nome continua legivel sobre o degrade */
+.row.has-team .name-text {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
 }
 
 .row.player {
@@ -319,9 +344,10 @@ html, body {
   letter-spacing: -0.3px;
 }
 
+/* Melhor volta: so negrito. A cor roxa saiu do texto porque o relogio e os
+   setores ja indicam a volta mais rapida. */
 .row.fastest .right-value,
 .right-value.fastest-gap {
-  color: #d24bff;
   font-weight: 700;
 }
 

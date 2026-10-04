@@ -313,11 +313,22 @@ function buildDrivers(standingsData, classes) {
       inGameName: inGamePrimary ? String(inGamePrimary) : null,
       description: description || null,
       teamName: d.teamName || di.teamName || null,
+      ...teamFields(d),
       raceNumber: di.raceNumber || di.RaceNumber || d.raceNumber || null,
       aliases: Array.from(aliases),
     });
   });
   return list;
+}
+
+// Dados da equipe que o RLT manda em teamInfo: nome completo e cores.
+function teamFields(d) {
+  const ti = (d && (d.teamInfo || d.TeamInfo)) || {};
+  return {
+    teamFullName: ti.fullName || ti.FullName || null,
+    teamPrimaryColor: normalizeColor(ti.primaryColor || ti.PrimaryColor || null),
+    teamSecondaryColor: normalizeColor(ti.secondaryColor || ti.SecondaryColor || null),
+  };
 }
 
 function parsePoints(p) {
@@ -410,6 +421,7 @@ function buildStandingsRows(standingsData, classes) {
       positionChange: d.positionChange != null ? d.positionChange : null,
       classPositionChange: classRow && classRow.positionChange != null ? classRow.positionChange : null,
       teamName: d.teamName || null,
+      ...teamFields(d),
       raceNumber: di.raceNumber || di.RaceNumber || d.raceNumber || null,
       classUniqueName: (cls && cls.uniqueName) || (classInfo && classInfo.uniqueName) || "—",
       className: (cls && cls.name) || (classInfo && classInfo.name) || "—",

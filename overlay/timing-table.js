@@ -12,6 +12,35 @@ let pageIndex = 0;
 let rltConfig = null;
 const RLT_MATCH_MIN = 0.98;
 
+// Degrade suave com a cor principal da equipe (RLT) no fundo da linha.
+// A intensidade vem da variavel CSS --team-tint, controlada pelo painel.
+function applyTeamTint(el, color) {
+  const rgb = color ? LLGColors.toRgb(color) : null;
+  el.classList.toggle("has-team", !!rgb);
+  if (rgb) el.style.setProperty("--team-rgb", rgb.join(", "));
+  else el.style.removeProperty("--team-rgb");
+}
+
+const TEAM_TINT_KEY = "teamTint";
+
+function setTeamTint(value, save) {
+  const root = document.getElementById("timing-table");
+  const v = Math.max(0, Math.min(1, Number(value)));
+  if (!root || Number.isNaN(v)) return;
+  root.style.setProperty("--team-tint", String(v));
+  if (save) {
+    try {
+      localStorage.setItem(TEAM_TINT_KEY, String(v));
+    } catch (_) {}
+  }
+}
+
+// a intensidade escolhida no painel sobrevive a um reload da overlay
+try {
+  const savedTint = localStorage.getItem(TEAM_TINT_KEY);
+  if (savedTint != null) setTeamTint(savedTint, false);
+} catch (_) {}
+
 function rowBg(hex) {
   const root = document.getElementById("timing-table");
   const op = root ? parseFloat(getComputedStyle(root).getPropertyValue("--row-opacity")) || 1 : 1;
@@ -125,13 +154,13 @@ function currentPageMode(standings) {
 }
 // Alturas em px. Precisam bater com timing-table.css:
 //   linha  = 43 (min-height) + 3 (border-top) + 3 (gap do #rows) = 49
-//   classe = 19 (texto 14px) + 12 (padding) + 3 (gap)            = 34
+//   classe = 46 (mesma altura da linha) + 3 (gap)                = 49
 // Com 49 px por linha cabem 20 linhas em 1080 px (total real: 1063 px).
 const MAX_TABLE_H = 1080;
 const TITLE_H = 48;
 const COL_HEADER_H = 36;
 const ROW_H = 49;
-const CLASS_HDR_H = 34;
+const CLASS_HDR_H = 49;
 const SAFETY_H = 16;
 let rotateTick = 0;
 const ROTATE_MS = 10000;
@@ -440,6 +469,9 @@ function applyOverlayCommand(name, payload = {}) {
       root.style.setProperty("--row-opacity", String(v));
     }
     return;
+  } else if (name === "overlay.setTeamTint") {
+    setTeamTint(payload.value, true);
+    return;
   } else if (name === "overlay.setTeamLogo") {
     setTeamLogoOverride(payload.teamName, payload.file || null);
   } else {
@@ -497,48 +529,14 @@ function updateSessionHeader(session) {
   if (table) table.classList.toggle("sc-out", !!session.scOut);
 }
 
-function formatClassName(raw) {
-  if (!raw) return raw;
-  if (typeof CLASS_NAME_OVERRIDES !== "undefined" && CLASS_NAME_OVERRIDES[raw]) {
-    return CLASS_NAME_OVERRIDES[raw];
-  }
-  return raw
-    .replace(/_(LD|HD|SW)(?=_|$)/gi, "") // sufixos tecnicos que nao fazem parte do nome
-    .replace(/_/g, " ")
-    .trim();
-}
-
-function hashColor(str) {
-  let h = 0;
-  const s = String(str || "");
-  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  const hue = Math.abs(h) % 360;
-  return `hsl(${hue}, 65%, 42%)`;
-}
+// Nome e cor de classe e arquivos de logo: regras compartilhadas com o
+// driver card (shared/display.js).
+const formatClassName = LLGDisplay.formatClassName;
 
 const normalizeColor = LLGColors.normalizeColor;
 
 function classColor(carClass) {
-  if (rltEnabled() && rltConfig.classes) {
-    const c = rltConfig.classes.find((x) => x.uniqueName === carClass || x.name === carClass);
-    const col = c && normalizeColor(c.color);
-    if (col) return col;
-  }
-  if (typeof CLASS_COLORS === "undefined") return DEFAULT_COLOR;
-  if (carClass && CLASS_COLORS[carClass]) return CLASS_COLORS[carClass];
-  const formatted = formatClassName(carClass);
-  if (formatted && CLASS_COLORS[formatted]) return CLASS_COLORS[formatted];
-  if (carClass) {
-    const noSpace = carClass.replace(/\s+/g, "_");
-    if (CLASS_COLORS[noSpace]) return CLASS_COLORS[noSpace];
-  }
-  if (typeof CLASS_NAME_OVERRIDES !== "undefined") {
-    for (const [raw, name] of Object.entries(CLASS_NAME_OVERRIDES)) {
-      if (name === formatted && CLASS_COLORS[raw]) return CLASS_COLORS[raw];
-    }
-  }
-  if (carClass && carClass !== "—") return hashColor(carClass);
-  return DEFAULT_COLOR;
+  return LLGDisplay.classColor(carClass, rltEnabled() ? rltConfig.classes : null);
 }
 
 function contrastText(bg) {
@@ -579,7 +577,10 @@ let stablePlayerName = null;
 let stablePlayerClass = null;
 let pendingPlayerName = null;
 let pendingPlayerSince = 0;
-const PLAYER_STABLE_MS = 800;
+// Troca de piloto em foco: vale assim que duas leituras seguidas do jogo
+// concordam (~0,13 s cada). Uma leitura isolada e ignorada, para a camera
+// passando por outro carro nao fazer o destaque piscar.
+const PLAYER_STABLE_MS = 100;
 
 function updateStablePlayer(standings) {
   const viewed = standings.find((e) => e.isPlayer);
@@ -607,7 +608,7 @@ function updateStablePlayer(standings) {
     return;
   }
 
-  // mudanca de piloto: so aplica apos 800ms estavel
+  // mudanca de piloto: so aplica quando a leitura seguinte confirma
   if (name === pendingPlayerName) {
     if (now - pendingPlayerSince >= PLAYER_STABLE_MS) {
       stablePlayerName = name;
@@ -632,56 +633,13 @@ function getStablePlayerClass(standings) {
   return viewed ? viewed.carClass : null;
 }
 
-function manufacturerName(carName) {
-  return (carName || "").split(" ")[0];
-}
-
-function carLogo(carName) {
-  if (typeof CAR_LOGOS === "undefined") return undefined;
-  return CAR_LOGOS[manufacturerName(carName)] || CAR_LOGOS[carName];
-}
-
-function teamSlug(name) {
-  return String(name || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_|_$/g, "");
-}
-
-function teamLogoFile(teamName) {
-  if (!teamName) return null;
-  if (teamLogoOverrides && teamLogoOverrides[teamName]) return teamLogoOverrides[teamName];
-  if (typeof TEAM_LOGO_OVERRIDES !== "undefined" && TEAM_LOGO_OVERRIDES && TEAM_LOGO_OVERRIDES[teamName]) {
-    return TEAM_LOGO_OVERRIDES[teamName];
-  }
-  const slug = teamSlug(teamName);
-  if (!slug) return null;
-  return slug + ".png";
-}
-
-function carLogoFromTeam(teamName) {
-  if (!teamName || typeof CAR_LOGOS === "undefined") return null;
-  if (CAR_LOGOS[teamName]) return CAR_LOGOS[teamName];
-  const first = manufacturerName(teamName);
-  if (CAR_LOGOS[first]) return CAR_LOGOS[first];
-  const slug = teamSlug(teamName);
-  for (const key of Object.keys(CAR_LOGOS)) {
-    if (teamSlug(key) === slug) return CAR_LOGOS[key];
-  }
-  return null;
-}
-
 // Fonte online primeiro, pasta local overlay/assets como reserva.
 const logoLoader = LLGLogos.createLoader("assets");
 
 // Logo da linha: o da equipe se existir, senao o da montadora.
 function applyLogo(img, teamName, carName) {
   if (!img) return;
-  const carFile = carLogo(carName) || carLogoFromTeam(teamName);
-  const teamFile = teamLogoFile(teamName);
-  logoLoader.load(img, [teamFile ? `teams/${teamFile}` : null, carFile ? `cars/${carFile}` : null]);
+  logoLoader.load(img, LLGDisplay.logoPaths(teamName, carName, teamLogoOverrides));
 }
 
 let teamLogoOverrides = {};
@@ -1237,8 +1195,39 @@ function classStandingPos(r) {
   return r.classPosition != null ? r.classPosition : r.position || 999;
 }
 
-function buildStandingsDisplayList(standings) {
+// Nomes (normalizados) de quem esta na sessao atual: o nome do jogo e, se o
+// piloto foi reconhecido, o nome dele no RLT. Inclui quem ja abandonou.
+function livePresenceKeys(standings) {
+  const keys = new Set();
+  (standings || []).forEach((e) => {
+    const own = normalizeDriverName(e.name);
+    if (own) keys.add(own);
+    const info = rltLookup(e);
+    if (!info) return;
+    [info.displayName, info.driverName].forEach((v) => {
+      const n = normalizeDriverName(v);
+      if (n) keys.add(n);
+    });
+  });
+  return keys;
+}
+
+// A pontuacao so lista quem ja pontuou no campeonato ou esta na sessao atual.
+// (O RLT manda tambem os inscritos que nunca correram, com 0 ponto.)
+function standingsRowsToShow(standings) {
   const rows = (rltConfig && rltConfig.standingsRows) || [];
+  const present = livePresenceKeys(standings);
+  return rows.filter((r) => {
+    if (Number(r.pointsRaw) > 0 || Number(r.classPointsRaw) > 0) return true;
+    return [r.displayName, r.driverName, r.inGameName].some((v) => {
+      const n = normalizeDriverName(v);
+      return n && present.has(n);
+    });
+  });
+}
+
+function buildStandingsDisplayList(standings) {
+  const rows = standingsRowsToShow(standings);
   if (!rows.length) return [];
   const mode = currentPageMode(standings);
 
@@ -1424,6 +1413,7 @@ function renderStandings(standings) {
     const pos = item.displayPosition != null ? item.displayPosition : row.position;
     const clr = row.color || classColor(row.classUniqueName);
     el.style.borderTopColor = clr || "";
+    applyTeamTint(el, row.teamPrimaryColor);
     let isAssisted = false;
     if (playerHighlightEnabled && meKeys.size) {
       const rowKeys = [
@@ -1718,6 +1708,8 @@ function renderTable(standings) {
     el.classList.toggle("fastest", isPurple);
     const clr = classColor(groupKey(entry, standings));
     el.style.borderTopColor = clr;
+    const teamInfo = rltLookup(entry);
+    applyTeamTint(el, teamInfo && teamInfo.teamPrimaryColor);
     el.classList.toggle("yellow-flag", !!entry.causedYellow);
     if (!el.classList.contains("flash-up") && !el.classList.contains("flash-down")) {
       if (entry.causedYellow) {
