@@ -186,8 +186,8 @@ function showAssetsBaseStatus(body) {
   if (!el) return;
   if (input) input.value = body.baseUrl || "";
   el.textContent = body.baseUrl
-    ? `GitHub/raw: ${body.baseUrl} (v=${body.cacheBust || "—"})`
-    : "Usando assets local do projeto";
+    ? `Online primeiro: ${body.baseUrl} (v=${body.cacheBust || "—"}). Reserva: pasta local.`
+    : "Usando só a pasta local do projeto";
 }
 
 async function loadAssetsBase() {

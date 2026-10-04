@@ -8,18 +8,41 @@ const fs = require("fs");
 const express = require("express");
 const http = require("http");
 
+// .env precisa ser lido antes dos modulos que usam process.env (rltClient, obsController)
+require("./env").loadEnv();
+
 const { createWsServer } = require("./wsServer");
 const { startTcpBridge } = require("./tcpBridge");
 const { connectObs } = require("./obsController");
+const { createRaceState } = require("./raceState");
 const rlt = require("./rltClient");
 
 const HTTP_PORT = process.env.HTTP_PORT || 8080;
 const BRIDGE_PORT = process.env.BRIDGE_PORT || 5607;
+
+// Por padrao so este computador acessa o servidor. O painel troca pasta de
+// assets e a chave do RLT, entao nao deve ficar aberto para a rede inteira.
+// Para usar o painel/overlay de outro aparelho da rede, defina ALLOW_LAN=1.
+const ALLOW_LAN = /^(1|true|yes|sim)$/i.test(process.env.ALLOW_LAN || "");
+
+function isLocalRequest(req) {
+  if (ALLOW_LAN) return true;
+  const addr = (req.socket && req.socket.remoteAddress) || "";
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
 const DEFAULT_ASSETS = path.join(__dirname, "..", "overlay", "assets");
 let assetsPath = process.env.ASSETS_PATH
   ? path.resolve(process.env.ASSETS_PATH)
   : DEFAULT_ASSETS;
-let assetsBaseUrl = process.env.ASSETS_BASE_URL || process.env.GITHUB_ASSETS_URL || "";
+// Fonte online das imagens (logos de equipe/carro, icones). As overlays
+// tentam primeiro aqui e usam a pasta local overlay/assets como reserva.
+// ASSETS_BASE_URL no .env troca o repositorio; vazio (ASSETS_BASE_URL=)
+// desliga a fonte online e usa so a pasta local.
+const DEFAULT_ASSETS_BASE_URL = "https://github.com/Acceler23/liga_lets_go_imageAssets";
+let assetsBaseUrl =
+  process.env.ASSETS_BASE_URL !== undefined
+    ? process.env.ASSETS_BASE_URL
+    : process.env.GITHUB_ASSETS_URL || DEFAULT_ASSETS_BASE_URL;
 let assetsCacheBust = String(Date.now());
 
 function normalizeAssetsBaseUrl(raw) {
@@ -52,6 +75,10 @@ function broadcastAssetsConfig() {
 }
 
 const app = express();
+app.use((req, res, next) => {
+  if (isLocalRequest(req)) return next();
+  res.status(403).send("Acesso permitido apenas neste computador (defina ALLOW_LAN=1 para liberar a rede local).");
+});
 app.use(express.json());
 app.use("/overlay/assets", (req, res, next) => {
   express.static(assetsPath)(req, res, next);
@@ -61,7 +88,16 @@ app.use("/panel", express.static(path.join(__dirname, "..", "control-panel")));
 
 const server = http.createServer(app);
 
-const wss = createWsServer(server);
+const wss = createWsServer(server, { verifyClient: (info) => isLocalRequest(info.req) });
+
+const raceState = createRaceState();
+
+// Zera largada/paradas/bandeiradas guardadas no servidor e avisa as overlays.
+function resetRace() {
+  raceState.reset();
+  wss.broadcast({ type: "overlayCommand", name: "overlay.resetRace", payload: {} });
+}
+wss.onCommand("race.reset", resetRace);
 
 function broadcastRlt() {
   const payload = rlt.getOverlayPayload();
@@ -87,6 +123,10 @@ app.post("/command", (req, res) => {
   if (!name) return res.status(400).json({ ok: false });
   if (String(name).startsWith("overlay.")) {
     wss.broadcast({ type: "overlayCommand", name, payload: req.body.payload || {} });
+    return res.json({ ok: true });
+  }
+  if (name === "race.reset") {
+    resetRace();
     return res.json({ ok: true });
   }
   res.status(404).json({ ok: false });
@@ -253,11 +293,12 @@ app.post("/api/rlt/clear", (req, res) => {
   res.json({ ok: true });
 });
 
-// Bridge: o listener.ps1 le a Shared Memory do AMS2 e ja manda o standings
-// pronto em JSON -- aqui e' so' repassar pro WebSocket.
+// Bridge: o listener.ps1 le a Shared Memory do AMS2 e manda o standings em
+// JSON. O raceState acrescenta o que depende de historico (largada, paradas,
+// tempo de box, bandeirada) e o resultado vai pro WebSocket.
 startTcpBridge(BRIDGE_PORT, (buffer) => {
   try {
-    const data = JSON.parse(buffer.toString("utf8"));
+    const data = raceState.apply(JSON.parse(buffer.toString("utf8")));
     wss.broadcast({ type: "standings", data });
   } catch (err) {
     console.error("Erro ao interpretar dados da bridge:", err.message);
@@ -273,6 +314,9 @@ server.listen(HTTP_PORT, async () => {
   console.log(`Driver card overlay em   http://localhost:${HTTP_PORT}/overlay/driver-card.html`);
   console.log(`Painel de controle em    http://localhost:${HTTP_PORT}/panel/panel.html`);
   console.log(`Aguardando o listener.ps1 (rode-o em outra janela) para receber dados do AMS2`);
+  console.log(ALLOW_LAN ? "Acesso liberado para a rede local (ALLOW_LAN)." : "Acesso restrito a este computador.");
+  console.log(assetsBaseUrl ? `Imagens: ${assetsBaseUrl} (reserva: pasta local)` : "Imagens: somente pasta local.");
+  if (!rlt.hasKey()) console.log("RLT sem chave: defina RLT_API_KEY no arquivo .env ou salve pelo painel.");
   if (rlt.hasKey()) {
     try {
       await rlt.fetchLeague();

@@ -1,43 +1,72 @@
 // server/obsController.js
 // Conexao com o OBS via obs-websocket (nativo no OBS 28+, ativar em
-// Ferramentas > WebSocket Server Settings). Permite:
-//  - reagir a eventos de telemetria (ex: trocar de cena ao entrar nos boxes)
-//  - reagir a comandos vindos do painel de controle via wsServer
+// Ferramentas > WebSocket Server Settings). Permite reagir a comandos
+// vindos do painel de controle via wsServer.
+//
+// O OBS pode ser aberto antes ou depois do servidor: a conexao e tentada
+// de novo a cada 5 s, e tambem quando cai no meio da transmissao.
 
 const { OBSWebSocket } = require("obs-websocket-js");
 
 const OBS_URL = process.env.OBS_WS_URL || "ws://127.0.0.1:4455";
 const OBS_PASSWORD = process.env.OBS_WS_PASSWORD || "";
+const RETRY_MS = 5000;
 
-async function connectObs(wss) {
+function connectObs(wss) {
   const obs = new OBSWebSocket();
+  let connected = false;
+  let retryTimer = null;
+  let warned = false;
 
-  try {
-    await obs.connect(OBS_URL, OBS_PASSWORD);
-    console.log("Conectado ao obs-websocket");
-  } catch (err) {
-    console.warn("Nao foi possivel conectar ao OBS agora:", err.message);
-    console.warn("Overlay/telemetria continuam funcionando normalmente sem o OBS.");
-    return;
+  function scheduleRetry() {
+    if (retryTimer) return;
+    retryTimer = setTimeout(tryConnect, RETRY_MS);
   }
 
-  // Exemplo: painel de controle manda { type:"command", name:"obs.setScene", payload:{ scene:"Corrida" } }
-  wss.onCommand("obs.setScene", async (payload) => {
+  async function tryConnect() {
+    retryTimer = null;
     try {
-      await obs.call("SetCurrentProgramScene", { sceneName: payload.scene });
+      await obs.connect(OBS_URL, OBS_PASSWORD || undefined);
+      connected = true;
+      warned = false;
+      console.log("Conectado ao obs-websocket");
     } catch (err) {
-      console.error("Falha ao trocar cena no OBS:", err.message);
+      connected = false;
+      if (!warned) {
+        warned = true;
+        console.warn("Nao foi possivel conectar ao OBS agora:", err.message);
+        console.warn("Overlay/telemetria seguem normalmente. Nova tentativa a cada 5 s.");
+      }
+      scheduleRetry();
     }
+  }
+
+  obs.on("ConnectionClosed", () => {
+    if (connected) console.warn("Conexao com o OBS caiu, tentando reconectar...");
+    connected = false;
+    scheduleRetry();
   });
 
-  wss.onCommand("obs.startRecord", async () => {
-    await obs.call("StartRecord").catch((e) => console.error(e.message));
-  });
+  async function call(request, args) {
+    if (!connected) {
+      console.warn(`OBS desconectado: comando ${request} ignorado`);
+      return;
+    }
+    try {
+      await obs.call(request, args);
+    } catch (err) {
+      console.error(`Falha no comando ${request} do OBS:`, err.message);
+    }
+  }
 
-  wss.onCommand("obs.stopRecord", async () => {
-    await obs.call("StopRecord").catch((e) => console.error(e.message));
-  });
+  // Exemplo: painel manda { type:"command", name:"obs.setScene", payload:{ scene:"Corrida" } }
+  wss.onCommand("obs.setScene", (payload) =>
+    call("SetCurrentProgramScene", { sceneName: payload && payload.scene })
+  );
+  wss.onCommand("obs.startRecord", () => call("StartRecord"));
+  wss.onCommand("obs.stopRecord", () => call("StopRecord"));
 
+  tryConnect();
   return obs;
 }
 

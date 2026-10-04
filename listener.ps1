@@ -7,12 +7,24 @@
 # Os offsets abaixo vem da struct oficial (SharedMemory.h) que a Reiza
 # distribui junto do jogo. Le a cada 200ms e manda o resultado (em JSON) pro
 # servidor Node via TCP, com um prefixo de 4 bytes indicando o tamanho.
+#
+# A cada ciclo a Shared Memory inteira e copiada para um buffer local, e a
+# copia so e aceita se o numero de sequencia do jogo nao mudou durante a
+# copia (ver Read-Snapshot). Todos os campos sao lidos dessa copia, entao um
+# ciclo nunca mistura dados de dois instantes diferentes.
 
-$mapName = '$pcars2$'
-$bridgeHost = "127.0.0.1"
-$bridgePort = 5607
+param(
+    [string]$MapName = '$pcars2$',
+    [string]$BridgeHost = "127.0.0.1",
+    [int]$BridgePort = 5607
+)
+
+$mapName = $MapName
+$bridgeHost = $BridgeHost
+$bridgePort = $BridgePort
 
 # Offsets (em bytes) dentro da Shared Memory:
+$OFFSET_SEQUENCE_NUMBER          = 7320  # uint, impar enquanto o jogo esta escrevendo
 $OFFSET_SESSION_STATE            = 12
 $OFFSET_VIEWED_PARTICIPANT_INDEX = 20
 $OFFSET_NUM_PARTICIPANTS         = 24
@@ -117,9 +129,9 @@ $SESSION_LABELS = @{ 0="INVALIDA"; 1="TREINO LIVRE"; 2="TESTE"; 3="CLASSIFICACAO
 
 $maxSpeedKmh = @{}
 
-function Read-CString($accessor, $offset, $maxLen) {
+function Read-CString($src, $offset, $maxLen) {
     $bytes = New-Object byte[] $maxLen
-    [void]$accessor.ReadArray($offset, $bytes, 0, $maxLen)
+    [Array]::Copy($src, $offset, $bytes, 0, $maxLen)
     $nullIndex = [Array]::IndexOf($bytes, [byte]0)
     if ($nullIndex -lt 0) { $nullIndex = $maxLen }
     if ($nullIndex -le 0) { return "" }
@@ -133,6 +145,98 @@ function Read-CString($accessor, $offset, $maxLen) {
     }
 }
 
+function Read-Float4($src, $off) {
+    return @(
+        [math]::Round([BitConverter]::ToSingle($src, $off), 3),
+        [math]::Round([BitConverter]::ToSingle($src, $off + 4), 3),
+        [math]::Round([BitConverter]::ToSingle($src, $off + 8), 3),
+        [math]::Round([BitConverter]::ToSingle($src, $off + 12), 3)
+    )
+}
+function Read-UInt4($src, $off) {
+    return @(
+        [int][BitConverter]::ToUInt32($src, $off),
+        [int][BitConverter]::ToUInt32($src, $off + 4),
+        [int][BitConverter]::ToUInt32($src, $off + 8),
+        [int][BitConverter]::ToUInt32($src, $off + 12)
+    )
+}
+function Read-Vec3($src, $off) {
+    return @(
+        [math]::Round([BitConverter]::ToSingle($src, $off), 4),
+        [math]::Round([BitConverter]::ToSingle($src, $off + 4), 4),
+        [math]::Round([BitConverter]::ToSingle($src, $off + 8), 4)
+    )
+}
+
+# Mapeamento aberto uma unica vez e reaproveitado entre os ciclos.
+$script:mmf = $null
+$script:view = $null
+$script:snapshot = $null
+$script:lastSeq = $null
+$script:lastSeqChange = [DateTime]::UtcNow
+$script:tornCycles = 0
+$script:tornWarned = $false
+
+function Close-SharedMemory {
+    if ($script:view) { $script:view.Dispose() }
+    if ($script:mmf) { $script:mmf.Dispose() }
+    $script:view = $null
+    $script:mmf = $null
+    $script:lastSeq = $null
+}
+
+# Copia a Shared Memory para $script:snapshot. Devolve $true quando a copia
+# pode ser usada. O jogo incrementa o numero de sequencia no inicio e no fim
+# de cada escrita: impar = escrevendo agora; diferente antes/depois da copia
+# = o jogo escreveu no meio. Nos dois casos a copia e refeita.
+function Read-Snapshot {
+    if (-not $script:view) {
+        $script:mmf = [System.IO.MemoryMappedFiles.MemoryMappedFile]::OpenExisting($mapName)
+        $script:view = $script:mmf.CreateViewAccessor(0, 0)
+        $script:snapshot = New-Object byte[] ([int]$script:view.Capacity)
+        $script:lastSeq = $null
+        $script:lastSeqChange = [DateTime]::UtcNow
+    }
+
+    $consistent = $false
+    $seq = 0
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        $seq = $script:view.ReadUInt32($OFFSET_SEQUENCE_NUMBER)
+        [void]$script:view.ReadArray(0, $script:snapshot, 0, $script:snapshot.Length)
+        $seqAfter = $script:view.ReadUInt32($OFFSET_SEQUENCE_NUMBER)
+        if ((($seq -band 1) -eq 0) -and ($seq -eq $seqAfter)) { $consistent = $true; break }
+        [System.Threading.Thread]::SpinWait(5000)
+    }
+
+    # Nosso handle mantem o mapeamento vivo mesmo com o jogo fechado. Se o
+    # numero de sequencia parou por 5 s, fecha e reabre: com o jogo fechado a
+    # reabertura falha e caimos no aviso de "sem dados", como antes.
+    $now = [DateTime]::UtcNow
+    if ($script:lastSeq -ne $seq) {
+        $script:lastSeq = $seq
+        $script:lastSeqChange = $now
+    } elseif (($now - $script:lastSeqChange).TotalSeconds -ge 5) {
+        Close-SharedMemory
+    }
+
+    if ($consistent) {
+        $script:tornCycles = 0
+        return $true
+    }
+    # Nao deveria acontecer. Pula alguns ciclos; se persistir, usa a copia
+    # mesmo assim (comportamento antigo) em vez de deixar a overlay sem dados.
+    $script:tornCycles++
+    if ($script:tornCycles -lt 10) { return $false }
+    if (-not $script:tornWarned) {
+        $script:tornWarned = $true
+        Write-Host "Aviso: numero de sequencia da Shared Memory nao estabiliza; usando leitura sem verificacao."
+    }
+    return $true
+}
+
+$lastSessionKey = $null
+
 Write-Host "Bridge (Shared Memory) iniciando..."
 
 while ($true) {
@@ -143,30 +247,41 @@ while ($true) {
 
         while ($tcp.Connected) {
             try {
-                $mmf = [System.IO.MemoryMappedFiles.MemoryMappedFile]::OpenExisting($mapName)
-                $accessor = $mmf.CreateViewAccessor(0, 0)
+                if (-not (Read-Snapshot)) {
+                    Start-Sleep -Milliseconds 20
+                    continue
+                }
+                $buf = $script:snapshot
 
-                $numParticipants = $accessor.ReadInt32($OFFSET_NUM_PARTICIPANTS)
-                $viewedIndex = $accessor.ReadInt32($OFFSET_VIEWED_PARTICIPANT_INDEX)
-                $sessionState = $accessor.ReadUInt32($OFFSET_SESSION_STATE)
-                $timeRemainingSec = [int]$accessor.ReadSingle($OFFSET_EVENT_TIME_REMAINING)
-                $trackLength = $accessor.ReadSingle($OFFSET_TRACK_LENGTH)
-                $lapsInEvent = $accessor.ReadUInt32($OFFSET_LAPS_IN_EVENT)
-                $trackLocation = Read-CString $accessor $OFFSET_TRACK_LOCATION 64
-                $trackVariation = Read-CString $accessor $OFFSET_TRACK_VARIATION 64
-                $splitAhead = $accessor.ReadSingle($OFFSET_SPLIT_TIME_AHEAD)
+                $numParticipants = [BitConverter]::ToInt32($buf, $OFFSET_NUM_PARTICIPANTS)
+                $viewedIndex = [BitConverter]::ToInt32($buf, $OFFSET_VIEWED_PARTICIPANT_INDEX)
+                $sessionState = [BitConverter]::ToUInt32($buf, $OFFSET_SESSION_STATE)
+                $timeRemainingSec = [int][BitConverter]::ToSingle($buf, $OFFSET_EVENT_TIME_REMAINING)
+                $trackLength = [BitConverter]::ToSingle($buf, $OFFSET_TRACK_LENGTH)
+                $lapsInEvent = [BitConverter]::ToUInt32($buf, $OFFSET_LAPS_IN_EVENT)
+                $trackLocation = Read-CString $buf $OFFSET_TRACK_LOCATION 64
+                $trackVariation = Read-CString $buf $OFFSET_TRACK_VARIATION 64
+                $splitAhead = [BitConverter]::ToSingle($buf, $OFFSET_SPLIT_TIME_AHEAD)
                 $inRace = ($sessionState -eq 5)
+                if ($numParticipants -gt 64) { $numParticipants = 64 }
+
+                # velocidade maxima vale por sessao: zera ao trocar de sessao ou de pista
+                $sessionKey = "$sessionState|$trackLocation|$trackVariation"
+                if ($sessionKey -ne $lastSessionKey) {
+                    $lastSessionKey = $sessionKey
+                    $maxSpeedKmh.Clear()
+                }
 
                 $standings = @()
                 $scOut = $false
                 for ($i = 0; $i -lt $numParticipants; $i++) {
                     $base = $OFFSET_PARTICIPANT_INFO_START + ($i * $PARTICIPANT_INFO_SIZE)
-                    $isActive = $accessor.ReadByte($base) -ne 0
-                    $racePosition = $accessor.ReadUInt32($base + 84)
+                    $isActive = $buf[$base] -ne 0
+                    $racePosition = [BitConverter]::ToUInt32($buf, $base + 84)
 
-                    $carName = Read-CString $accessor ($OFFSET_CAR_NAMES + ($i * 64)) 64
-                    $carClass = Read-CString $accessor ($OFFSET_CAR_CLASS_NAMES + ($i * 64)) 64
-                    $pitMode = $accessor.ReadUInt32($OFFSET_PIT_MODES + ($i * 4))
+                    $carName = Read-CString $buf ($OFFSET_CAR_NAMES + ($i * 64)) 64
+                    $carClass = Read-CString $buf ($OFFSET_CAR_CLASS_NAMES + ($i * 64)) 64
+                    $pitMode = [BitConverter]::ToUInt32($buf, $OFFSET_PIT_MODES + ($i * 4))
 
                     $clsLow = if ($carClass) { $carClass.ToLower() } else { "" }
                     $cnLow = if ($carName) { $carName.ToLower() } else { "" }
@@ -176,25 +291,25 @@ while ($true) {
 
                     if (-not $isActive -or $racePosition -eq 0) { continue }
 
-                    $name = Read-CString $accessor ($base + 1) 64
-                    $currentLapDistance = $accessor.ReadSingle($base + 80)
-                    $lapsCompleted = $accessor.ReadUInt32($base + 88)
-                    $currentLap = $accessor.ReadUInt32($base + 92)
-                    $currentSector = $accessor.ReadInt32($base + 96)
+                    $name = Read-CString $buf ($base + 1) 64
+                    $currentLapDistance = [BitConverter]::ToSingle($buf, $base + 80)
+                    $lapsCompleted = [BitConverter]::ToUInt32($buf, $base + 88)
+                    $currentLap = [BitConverter]::ToUInt32($buf, $base + 92)
+                    $currentSector = [BitConverter]::ToInt32($buf, $base + 96)
 
-                    $fastestLap = $accessor.ReadSingle($OFFSET_FASTEST_LAP_TIMES + ($i * 4))
-                    $lastLap = $accessor.ReadSingle($OFFSET_LAST_LAP_TIMES + ($i * 4))
-                    $speed = $accessor.ReadSingle($OFFSET_SPEEDS + ($i * 4))
-                    $raceState = $accessor.ReadUInt32($OFFSET_RACE_STATES + ($i * 4))
-                    $s1 = $accessor.ReadSingle($OFFSET_CUR_SECTOR1 + ($i * 4))
-                    $s2 = $accessor.ReadSingle($OFFSET_CUR_SECTOR2 + ($i * 4))
-                    $s3 = $accessor.ReadSingle($OFFSET_CUR_SECTOR3 + ($i * 4))
-                    $fs1 = $accessor.ReadSingle($OFFSET_FAST_SECTOR1 + ($i * 4))
-                    $fs2 = $accessor.ReadSingle($OFFSET_FAST_SECTOR2 + ($i * 4))
-                    $fs3 = $accessor.ReadSingle($OFFSET_FAST_SECTOR3 + ($i * 4))
-                    $flagColour = $accessor.ReadUInt32($OFFSET_FLAG_COLOURS + ($i * 4))
-                    $flagReason = $accessor.ReadUInt32($OFFSET_FLAG_REASONS + ($i * 4))
-                    $lapInvalid = $accessor.ReadByte($OFFSET_LAPS_INVALIDATED + $i) -ne 0
+                    $fastestLap = [BitConverter]::ToSingle($buf, $OFFSET_FASTEST_LAP_TIMES + ($i * 4))
+                    $lastLap = [BitConverter]::ToSingle($buf, $OFFSET_LAST_LAP_TIMES + ($i * 4))
+                    $speed = [BitConverter]::ToSingle($buf, $OFFSET_SPEEDS + ($i * 4))
+                    $raceState = [BitConverter]::ToUInt32($buf, $OFFSET_RACE_STATES + ($i * 4))
+                    $s1 = [BitConverter]::ToSingle($buf, $OFFSET_CUR_SECTOR1 + ($i * 4))
+                    $s2 = [BitConverter]::ToSingle($buf, $OFFSET_CUR_SECTOR2 + ($i * 4))
+                    $s3 = [BitConverter]::ToSingle($buf, $OFFSET_CUR_SECTOR3 + ($i * 4))
+                    $fs1 = [BitConverter]::ToSingle($buf, $OFFSET_FAST_SECTOR1 + ($i * 4))
+                    $fs2 = [BitConverter]::ToSingle($buf, $OFFSET_FAST_SECTOR2 + ($i * 4))
+                    $fs3 = [BitConverter]::ToSingle($buf, $OFFSET_FAST_SECTOR3 + ($i * 4))
+                    $flagColour = [BitConverter]::ToUInt32($buf, $OFFSET_FLAG_COLOURS + ($i * 4))
+                    $flagReason = [BitConverter]::ToUInt32($buf, $OFFSET_FLAG_REASONS + ($i * 4))
+                    $lapInvalid = $buf[$OFFSET_LAPS_INVALIDATED + $i] -ne 0
 
                     if ($inRace -and $raceState -eq 0) { continue }
                     if ($inRace -and [int]$lapsCompleted -eq 0 -and ($pitMode -eq 4 -or $pitMode -eq 2)) { continue }
@@ -206,6 +321,7 @@ while ($true) {
                     }
 
                     $entry = [PSCustomObject]@{
+                        slot          = $i   # indice do participante na Shared Memory
                         position      = [int]$racePosition
                         name          = $name
                         carName       = $carName
@@ -240,9 +356,9 @@ while ($true) {
                         if ($splitAhead -ge 0) {
                             $entry | Add-Member -NotePropertyName splitAhead -NotePropertyValue ([math]::Round($splitAhead, 2))
                         }
-                        $fuelLevel = $accessor.ReadSingle($OFFSET_FUEL_LEVEL)
-                        $fuelCap = $accessor.ReadSingle($OFFSET_FUEL_CAPACITY)
-                        $tyre = Read-CString $accessor $OFFSET_TYRE_COMPOUND 40
+                        $fuelLevel = [BitConverter]::ToSingle($buf, $OFFSET_FUEL_LEVEL)
+                        $fuelCap = [BitConverter]::ToSingle($buf, $OFFSET_FUEL_CAPACITY)
+                        $tyre = Read-CString $buf $OFFSET_TYRE_COMPOUND 40
                         $entry | Add-Member -NotePropertyName fuelPct -NotePropertyValue ([math]::Round($fuelLevel * 100, 1))
                         if ($fuelCap -gt 0) {
                             $entry | Add-Member -NotePropertyName fuelL -NotePropertyValue ([math]::Round($fuelLevel * $fuelCap, 1))
@@ -254,115 +370,88 @@ while ($true) {
                     $standings += $entry
                 }
 
-                function Read-Float4($acc, $off) {
-                    return @(
-                        [math]::Round($acc.ReadSingle($off), 3),
-                        [math]::Round($acc.ReadSingle($off + 4), 3),
-                        [math]::Round($acc.ReadSingle($off + 8), 3),
-                        [math]::Round($acc.ReadSingle($off + 12), 3)
-                    )
-                }
-                function Read-UInt4($acc, $off) {
-                    return @(
-                        [int]$acc.ReadUInt32($off),
-                        [int]$acc.ReadUInt32($off + 4),
-                        [int]$acc.ReadUInt32($off + 8),
-                        [int]$acc.ReadUInt32($off + 12)
-                    )
-                }
-                function Read-Vec3($acc, $off) {
-                    return @(
-                        [math]::Round($acc.ReadSingle($off), 4),
-                        [math]::Round($acc.ReadSingle($off + 4), 4),
-                        [math]::Round($acc.ReadSingle($off + 8), 4)
-                    )
-                }
-
                 $car = [PSCustomObject]@{
-                    carName        = Read-CString $accessor $OFFSET_CAR_NAME 64
-                    carClass       = Read-CString $accessor $OFFSET_CAR_CLASS_NAME 64
-                    throttle       = [math]::Round($accessor.ReadSingle($OFFSET_THROTTLE), 3)
-                    brake          = [math]::Round($accessor.ReadSingle($OFFSET_BRAKE), 3)
-                    clutch         = [math]::Round($accessor.ReadSingle($OFFSET_CLUTCH), 3)
-                    steering       = [math]::Round($accessor.ReadSingle($OFFSET_STEERING), 3)
-                    handbrake      = [math]::Round($accessor.ReadSingle($OFFSET_HANDBRAKE), 3)
-                    unfThrottle    = [math]::Round($accessor.ReadSingle($OFFSET_UNFILTERED_THROTTLE), 3)
-                    unfBrake       = [math]::Round($accessor.ReadSingle($OFFSET_UNFILTERED_BRAKE), 3)
-                    unfClutch      = [math]::Round($accessor.ReadSingle($OFFSET_UNFILTERED_CLUTCH), 3)
-                    unfSteering    = [math]::Round($accessor.ReadSingle($OFFSET_UNFILTERED_STEERING), 3)
-                    rpm            = [math]::Round($accessor.ReadSingle($OFFSET_RPM), 0)
-                    maxRpm         = [math]::Round($accessor.ReadSingle($OFFSET_MAX_RPM), 0)
-                    engineSpeed    = [math]::Round($accessor.ReadSingle($OFFSET_ENGINE_SPEED), 2)
-                    engineTorque   = [math]::Round($accessor.ReadSingle($OFFSET_ENGINE_TORQUE), 1)
-                    speedMs        = [math]::Round($accessor.ReadSingle($OFFSET_SPEED), 2)
-                    speedKmh       = [math]::Round($accessor.ReadSingle($OFFSET_SPEED) * 3.6, 1)
-                    gear           = [int]$accessor.ReadInt32($OFFSET_GEAR)
-                    numGears       = [int]$accessor.ReadInt32($OFFSET_NUM_GEARS)
-                    odometerKm     = [math]::Round($accessor.ReadSingle($OFFSET_ODOMETER), 2)
-                    oilTempC       = [math]::Round($accessor.ReadSingle($OFFSET_OIL_TEMP), 1)
-                    oilPressureKPa = [math]::Round($accessor.ReadSingle($OFFSET_OIL_PRESSURE), 1)
-                    waterTempC     = [math]::Round($accessor.ReadSingle($OFFSET_WATER_TEMP), 1)
-                    waterPressureKPa = [math]::Round($accessor.ReadSingle($OFFSET_WATER_PRESSURE), 1)
-                    fuelPressureKPa  = [math]::Round($accessor.ReadSingle($OFFSET_FUEL_PRESSURE), 1)
-                    fuelLevel      = [math]::Round($accessor.ReadSingle($OFFSET_FUEL_LEVEL), 4)
-                    fuelCapacityL  = [math]::Round($accessor.ReadSingle($OFFSET_FUEL_CAPACITY), 1)
-                    fuelPct        = [math]::Round($accessor.ReadSingle($OFFSET_FUEL_LEVEL) * 100, 1)
-                    carFlags       = [int]$accessor.ReadUInt32($OFFSET_CAR_FLAGS)
-                    absActive      = ($accessor.ReadByte($OFFSET_ABS_ACTIVE) -ne 0)
-                    boostActive    = ($accessor.ReadByte($OFFSET_BOOST_ACTIVE) -ne 0)
-                    boostAmount    = [math]::Round($accessor.ReadSingle($OFFSET_BOOST_AMOUNT), 1)
-                    turboBoost     = [math]::Round($accessor.ReadSingle($OFFSET_TURBO_BOOST), 3)
-                    brakeBias      = [math]::Round($accessor.ReadSingle($OFFSET_BRAKE_BIAS), 3)
+                    carName        = Read-CString $buf $OFFSET_CAR_NAME 64
+                    carClass       = Read-CString $buf $OFFSET_CAR_CLASS_NAME 64
+                    throttle       = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_THROTTLE), 3)
+                    brake          = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_BRAKE), 3)
+                    clutch         = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_CLUTCH), 3)
+                    steering       = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_STEERING), 3)
+                    handbrake      = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_HANDBRAKE), 3)
+                    unfThrottle    = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_UNFILTERED_THROTTLE), 3)
+                    unfBrake       = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_UNFILTERED_BRAKE), 3)
+                    unfClutch      = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_UNFILTERED_CLUTCH), 3)
+                    unfSteering    = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_UNFILTERED_STEERING), 3)
+                    rpm            = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_RPM), 0)
+                    maxRpm         = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_MAX_RPM), 0)
+                    engineSpeed    = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_ENGINE_SPEED), 2)
+                    engineTorque   = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_ENGINE_TORQUE), 1)
+                    speedMs        = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_SPEED), 2)
+                    speedKmh       = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_SPEED) * 3.6, 1)
+                    gear           = [int][BitConverter]::ToInt32($buf, $OFFSET_GEAR)
+                    numGears       = [int][BitConverter]::ToInt32($buf, $OFFSET_NUM_GEARS)
+                    odometerKm     = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_ODOMETER), 2)
+                    oilTempC       = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_OIL_TEMP), 1)
+                    oilPressureKPa = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_OIL_PRESSURE), 1)
+                    waterTempC     = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_WATER_TEMP), 1)
+                    waterPressureKPa = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_WATER_PRESSURE), 1)
+                    fuelPressureKPa  = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_FUEL_PRESSURE), 1)
+                    fuelLevel      = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_FUEL_LEVEL), 4)
+                    fuelCapacityL  = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_FUEL_CAPACITY), 1)
+                    fuelPct        = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_FUEL_LEVEL) * 100, 1)
+                    carFlags       = [int][BitConverter]::ToUInt32($buf, $OFFSET_CAR_FLAGS)
+                    absActive      = ($buf[$OFFSET_ABS_ACTIVE] -ne 0)
+                    boostActive    = ($buf[$OFFSET_BOOST_ACTIVE] -ne 0)
+                    boostAmount    = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_BOOST_AMOUNT), 1)
+                    turboBoost     = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_TURBO_BOOST), 3)
+                    brakeBias      = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_BRAKE_BIAS), 3)
                     wings          = @(
-                        [math]::Round($accessor.ReadSingle($OFFSET_WINGS), 3),
-                        [math]::Round($accessor.ReadSingle($OFFSET_WINGS + 4), 3)
+                        [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_WINGS), 3),
+                        [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_WINGS + 4), 3)
                     )
-                    crashState     = [int]$accessor.ReadUInt32($OFFSET_CRASH_STATE)
-                    aeroDamage     = [math]::Round($accessor.ReadSingle($OFFSET_AERO_DAMAGE), 3)
-                    engineDamage   = [math]::Round($accessor.ReadSingle($OFFSET_ENGINE_DAMAGE), 3)
-                    orientation    = Read-Vec3 $accessor $OFFSET_ORIENTATION
-                    localVelocity  = Read-Vec3 $accessor $OFFSET_LOCAL_VELOCITY
-                    localAccel     = Read-Vec3 $accessor $OFFSET_LOCAL_ACCEL
-                    tyreFlags      = Read-UInt4 $accessor $OFFSET_TYRE_FLAGS
-                    terrain        = Read-UInt4 $accessor $OFFSET_TERRAIN
-                    tyreRps        = Read-Float4 $accessor $OFFSET_TYRE_RPS
-                    tyreTemp       = Read-Float4 $accessor $OFFSET_TYRE_TEMP
-                    tyreTempLeft   = Read-Float4 $accessor $OFFSET_TYRE_TEMP_LEFT
-                    tyreTempCenter = Read-Float4 $accessor $OFFSET_TYRE_TEMP_CENTER
-                    tyreTempRight  = Read-Float4 $accessor $OFFSET_TYRE_TEMP_RIGHT
-                    tyreWear       = Read-Float4 $accessor $OFFSET_TYRE_WEAR
-                    tyreTreadTemp  = Read-Float4 $accessor $OFFSET_TYRE_TREAD_TEMP
-                    tyreLayerTemp  = Read-Float4 $accessor $OFFSET_TYRE_LAYER_TEMP
-                    tyreCarcassTemp = Read-Float4 $accessor $OFFSET_TYRE_CARCASS_TEMP
-                    tyreRimTemp    = Read-Float4 $accessor $OFFSET_TYRE_RIM_TEMP
-                    tyreAirTemp    = Read-Float4 $accessor $OFFSET_TYRE_AIR_TEMP
-                    airPressurePsi = Read-Float4 $accessor $OFFSET_AIR_PRESSURE
-                    brakeTempC     = Read-Float4 $accessor $OFFSET_BRAKE_TEMP
-                    brakeDamage    = Read-Float4 $accessor $OFFSET_BRAKE_DAMAGE
-                    suspDamage     = Read-Float4 $accessor $OFFSET_SUSP_DAMAGE
-                    suspTravel     = Read-Float4 $accessor $OFFSET_SUSP_TRAVEL
-                    suspVelocity   = Read-Float4 $accessor $OFFSET_SUSP_VELOCITY
-                    rideHeightCm   = Read-Float4 $accessor $OFFSET_RIDE_HEIGHT
+                    crashState     = [int][BitConverter]::ToUInt32($buf, $OFFSET_CRASH_STATE)
+                    aeroDamage     = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_AERO_DAMAGE), 3)
+                    engineDamage   = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_ENGINE_DAMAGE), 3)
+                    orientation    = Read-Vec3 $buf $OFFSET_ORIENTATION
+                    localVelocity  = Read-Vec3 $buf $OFFSET_LOCAL_VELOCITY
+                    localAccel     = Read-Vec3 $buf $OFFSET_LOCAL_ACCEL
+                    tyreFlags      = Read-UInt4 $buf $OFFSET_TYRE_FLAGS
+                    terrain        = Read-UInt4 $buf $OFFSET_TERRAIN
+                    tyreRps        = Read-Float4 $buf $OFFSET_TYRE_RPS
+                    tyreTemp       = Read-Float4 $buf $OFFSET_TYRE_TEMP
+                    tyreTempLeft   = Read-Float4 $buf $OFFSET_TYRE_TEMP_LEFT
+                    tyreTempCenter = Read-Float4 $buf $OFFSET_TYRE_TEMP_CENTER
+                    tyreTempRight  = Read-Float4 $buf $OFFSET_TYRE_TEMP_RIGHT
+                    tyreWear       = Read-Float4 $buf $OFFSET_TYRE_WEAR
+                    tyreTreadTemp  = Read-Float4 $buf $OFFSET_TYRE_TREAD_TEMP
+                    tyreLayerTemp  = Read-Float4 $buf $OFFSET_TYRE_LAYER_TEMP
+                    tyreCarcassTemp = Read-Float4 $buf $OFFSET_TYRE_CARCASS_TEMP
+                    tyreRimTemp    = Read-Float4 $buf $OFFSET_TYRE_RIM_TEMP
+                    tyreAirTemp    = Read-Float4 $buf $OFFSET_TYRE_AIR_TEMP
+                    airPressurePsi = Read-Float4 $buf $OFFSET_AIR_PRESSURE
+                    brakeTempC     = Read-Float4 $buf $OFFSET_BRAKE_TEMP
+                    brakeDamage    = Read-Float4 $buf $OFFSET_BRAKE_DAMAGE
+                    suspDamage     = Read-Float4 $buf $OFFSET_SUSP_DAMAGE
+                    suspTravel     = Read-Float4 $buf $OFFSET_SUSP_TRAVEL
+                    suspVelocity   = Read-Float4 $buf $OFFSET_SUSP_VELOCITY
+                    rideHeightCm   = Read-Float4 $buf $OFFSET_RIDE_HEIGHT
                     tyreCompound   = @(
-                        (Read-CString $accessor $OFFSET_TYRE_COMPOUND 40),
-                        (Read-CString $accessor ($OFFSET_TYRE_COMPOUND + 40) 40),
-                        (Read-CString $accessor ($OFFSET_TYRE_COMPOUND + 80) 40),
-                        (Read-CString $accessor ($OFFSET_TYRE_COMPOUND + 120) 40)
+                        (Read-CString $buf $OFFSET_TYRE_COMPOUND 40),
+                        (Read-CString $buf ($OFFSET_TYRE_COMPOUND + 40) 40),
+                        (Read-CString $buf ($OFFSET_TYRE_COMPOUND + 80) 40),
+                        (Read-CString $buf ($OFFSET_TYRE_COMPOUND + 120) 40)
                     )
-                    drsState       = [int]$accessor.ReadUInt32($OFFSET_DRS_STATE)
-                    absSetting     = [int]$accessor.ReadInt32($OFFSET_ABS_SETTING)
-                    tcSetting      = [int]$accessor.ReadInt32($OFFSET_TC_SETTING)
-                    ersMode        = [int]$accessor.ReadInt32($OFFSET_ERS_MODE)
-                    ersAuto        = ($accessor.ReadByte($OFFSET_ERS_AUTO) -ne 0)
-                    clutchTempK    = [math]::Round($accessor.ReadSingle($OFFSET_CLUTCH_TEMP), 1)
-                    clutchWear     = [math]::Round($accessor.ReadSingle($OFFSET_CLUTCH_WEAR), 3)
-                    clutchOverheated = ($accessor.ReadByte($OFFSET_CLUTCH_OVERHEATED) -ne 0)
-                    clutchSlipping = ($accessor.ReadByte($OFFSET_CLUTCH_SLIPPING) -ne 0)
-                    launchStage    = [int]$accessor.ReadInt32($OFFSET_LAUNCH_STAGE)
+                    drsState       = [int][BitConverter]::ToUInt32($buf, $OFFSET_DRS_STATE)
+                    absSetting     = [int][BitConverter]::ToInt32($buf, $OFFSET_ABS_SETTING)
+                    tcSetting      = [int][BitConverter]::ToInt32($buf, $OFFSET_TC_SETTING)
+                    ersMode        = [int][BitConverter]::ToInt32($buf, $OFFSET_ERS_MODE)
+                    ersAuto        = ($buf[$OFFSET_ERS_AUTO] -ne 0)
+                    clutchTempK    = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_CLUTCH_TEMP), 1)
+                    clutchWear     = [math]::Round([BitConverter]::ToSingle($buf, $OFFSET_CLUTCH_WEAR), 3)
+                    clutchOverheated = ($buf[$OFFSET_CLUTCH_OVERHEATED] -ne 0)
+                    clutchSlipping = ($buf[$OFFSET_CLUTCH_SLIPPING] -ne 0)
+                    launchStage    = [int][BitConverter]::ToInt32($buf, $OFFSET_LAUNCH_STAGE)
                 }
-
-                $accessor.Dispose()
-                $mmf.Dispose()
 
                 $standingsSorted = @($standings | Sort-Object position)
 
@@ -390,6 +479,7 @@ while ($true) {
                 $stream.Write($payloadBytes, 0, $payloadBytes.Length)
             }
             catch {
+                Close-SharedMemory
                 Write-Host "Sem dados agora (jogo fechado ou no menu?):" $_.Exception.Message
             }
 

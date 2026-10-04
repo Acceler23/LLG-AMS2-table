@@ -1,15 +1,13 @@
 // server/tcpBridge.js
 //
-// O modulo nativo de UDP do Node no Windows tem um bug conhecido: ele
-// descarta silenciosamente pacotes de broadcast com um certo campo do
-// cabecalho IP zerado -- exatamente o tipo que o AMS2 manda. Por isso,
-// em vez de ler o UDP diretamente aqui, recebemos os pacotes via TCP de
-// uma pontezinha em PowerShell (bridge.ps1) que le o UDP (isso funciona
-// bem no .NET) e repassa cada pacote pra ca, prefixado com 4 bytes
-// indicando o tamanho (big-endian), pra sabermos onde um pacote termina
-// e o outro comeca dentro do fluxo TCP.
+// Recebe os dados do listener.ps1 por TCP local. O listener le a Shared
+// Memory do AMS2 e manda um JSON por ciclo, prefixado com 4 bytes indicando
+// o tamanho (big-endian), pra sabermos onde uma mensagem termina e a outra
+// comeca dentro do fluxo TCP.
 
 const net = require("net");
+
+const MAX_MESSAGE_BYTES = 4 * 1024 * 1024; // um ciclo completo tem ~40 KB
 
 function startTcpBridge(port, onPacket) {
   const server = net.createServer((socket) => {
@@ -23,6 +21,12 @@ function startTcpBridge(port, onPacket) {
       // varios pedacos -- por isso o loop + prefixo de tamanho
       while (buffer.length >= 4) {
         const msgLen = buffer.readUInt32BE(0);
+        if (msgLen > MAX_MESSAGE_BYTES) {
+          // prefixo corrompido: derruba a conexao, o listener reconecta sozinho
+          console.error("Bridge: tamanho de mensagem invalido, reiniciando conexao");
+          socket.destroy();
+          return;
+        }
         if (buffer.length < 4 + msgLen) break; // ainda falta parte do pacote
         const msg = buffer.subarray(4, 4 + msgLen);
         buffer = buffer.subarray(4 + msgLen);
