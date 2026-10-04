@@ -263,9 +263,12 @@ function render() {
   card.classList.remove("hidden");
 
   const overall = entry.position || 0;
-  const classPos = classPosition(entry, latestStandings) || overall;
-  document.getElementById("posClass").textContent = classPos || "—";
-  document.getElementById("posOverall").textContent = overall || "—";
+  // raceState do jogo: 4 desclassificado, 5 retirado, 6 DNF. Quem abandonou
+  // nao tem mais posicao.
+  const dnf = entry.raceState === 4 || entry.raceState === 5 || entry.raceState === 6;
+  const classPos = dnf ? "DNF" : classPosition(entry, latestStandings) || overall;
+  document.getElementById("posClass").textContent = dnf ? "—" : classPos || "—";
+  document.getElementById("posOverall").textContent = dnf ? "DNF" : overall || "—";
 
   // nome e cor da classe pelas mesmas regras da tabela
   const classBar = document.getElementById("classBar");

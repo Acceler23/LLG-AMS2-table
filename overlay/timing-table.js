@@ -1760,7 +1760,8 @@ function renderTable(standings) {
     const finished = entry.raceState === 3;
     el.classList.toggle("finished", !!finished && isRaceSession());
 
-    posEl.textContent = item.displayPosition;
+    // quem abandonou nao tem mais posicao: a coluna da direita ja mostra DNF
+    posEl.textContent = isDnf(entry) ? "—" : item.displayPosition;
     el.querySelector(".name-text").textContent = rltDisplayName(entry);
     const gKey = groupKey(entry, standings);
     const rowBestFastest = (isClassMode && bestFastestByClass[gKey] != null)
