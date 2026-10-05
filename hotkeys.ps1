@@ -2,8 +2,12 @@
 # , . = coluna | [ ] = pagina | P = destaque | 0 = standings
 # Se o AMS2 estiver como Admin, rode este script tambem como Admin.
 
+# -ParentPid: PID do aplicativo que iniciou este script; se ele fechar, o
+# script encerra sozinho.
+param([int]$Port = 8080, [int]$ParentPid = 0)
+
 $ErrorActionPreference = "Continue"
-$cmdUrl = "http://127.0.0.1:8080/command"
+$cmdUrl = "http://127.0.0.1:$Port/command"
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -TypeDefinition @"
@@ -31,6 +35,21 @@ public class KbHook {
   [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr hhk);
   [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
   [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string name);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
+  [DllImport("user32.dll")] static extern IntPtr GetKeyboardLayout(uint thread);
+  [DllImport("user32.dll")] static extern uint MapVirtualKeyEx(uint code, uint mapType, IntPtr layout);
+
+  // Caractere que a tecla produz no layout de teclado da janela em foco.
+  // O codigo da tecla (VK) depende do layout: num teclado ABNT2 o VK que nos
+  // teclados americanos e "[" fica na tecla do acento agudo, e o "]" tem outro
+  // VK. Por isso os atalhos sao reconhecidos pelo caractere, nao pelo VK.
+  static char KeyChar(uint vk) {
+    IntPtr layout = GetKeyboardLayout(GetWindowThreadProcessId(GetForegroundWindow(), IntPtr.Zero));
+    uint ch = MapVirtualKeyEx(vk, 2 /* MAPVK_VK_TO_CHAR */, layout);
+    if ((ch & 0x80000000) != 0) return (char)0; // tecla morta (acento): nao e atalho
+    return (char)(ch & 0xFFFF);
+  }
 
   [StructLayout(LayoutKind.Sequential)]
   struct KBDLLHOOKSTRUCT {
@@ -63,8 +82,10 @@ public class KbHook {
       if (vk != _lastVk || (now - _lastTick) > 200) {
         _lastVk = vk;
         _lastTick = now;
-        if (vk == 0xBC || vk == 0xBE || vk == 0xDB || vk == 0xDD || vk == 0x50 || vk == 0x30 || vk == 0x60)
-          Queue.Enqueue(vk);
+        // enfileira o caractere: , . [ ] P 0 (o 0 do teclado numerico tambem vale)
+        char c = vk == 0x60 ? '0' : KeyChar((uint)vk);
+        if (c == ',' || c == '.' || c == '[' || c == ']' || c == 'P' || c == '0')
+          Queue.Enqueue((int)c);
       }
     }
     return CallNextHookEx(_hook, nCode, wParam, lParam);
@@ -115,17 +136,26 @@ try {
   Write-Host "Feche a janela para sair."
 
   $form = New-Object PumpForm
+  $script:parentCheck = 0
   $form.Timer.add_Tick({
+    # a cada ~2 s confere se o aplicativo que nos iniciou continua aberto
+    $script:parentCheck++
+    if ($ParentPid -gt 0 -and $script:parentCheck -ge 40) {
+      $script:parentCheck = 0
+      if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) {
+        [System.Windows.Forms.Application]::Exit()
+        return
+      }
+    }
     $vk = 0
     while ([KbHook]::Queue.TryDequeue([ref]$vk)) {
       switch ($vk) {
-        0xBC { if (Send-Cmd "overlay.prevColumn") { Write-Host "[,] coluna -" } }
-        0xBE { if (Send-Cmd "overlay.nextColumn") { Write-Host "[.] coluna +" } }
-        0xDB { if (Send-Cmd "overlay.prevPage") { Write-Host "[[] pagina -" } }
-        0xDD { if (Send-Cmd "overlay.nextPage") { Write-Host "[]] pagina +" } }
-        0x50 { if (Send-Cmd "overlay.toggleHighlight") { Write-Host "[P] destaque" } }
-        0x30 { if (Send-Cmd "overlay.toggleStandings") { Write-Host "[0] standings" } }
-        0x60 { if (Send-Cmd "overlay.toggleStandings") { Write-Host "[0] standings" } }
+        44 { if (Send-Cmd "overlay.prevColumn") { Write-Host "[,] coluna -" } }
+        46 { if (Send-Cmd "overlay.nextColumn") { Write-Host "[.] coluna +" } }
+        91 { if (Send-Cmd "overlay.prevPage") { Write-Host "[[] pagina -" } }
+        93 { if (Send-Cmd "overlay.nextPage") { Write-Host "[]] pagina +" } }
+        80 { if (Send-Cmd "overlay.toggleHighlight") { Write-Host "[P] destaque" } }
+        48 { if (Send-Cmd "overlay.toggleStandings") { Write-Host "[0] standings" } }
       }
     }
   })

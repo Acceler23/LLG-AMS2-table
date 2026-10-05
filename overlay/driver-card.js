@@ -90,7 +90,9 @@ function rltDisplayName(entry) {
 function rltTeamName(entry) {
   const info = rltLookup(entry);
   if (info && info.teamName) return info.teamName;
-  return entry.teamName || entry.carName || "";
+  // a equipe do proprio jogo (LMU) so vale sem temporada do RLT aplicada
+  if (!rltConfig && entry.teamName) return entry.teamName;
+  return entry.carName || "";
 }
 
 // Nome completo da equipe (so para exibir; os logos usam o nome curto).
@@ -149,6 +151,8 @@ function classLabel(entry) {
 function rltRaceNumber(entry) {
   const info = rltLookup(entry);
   if (info && info.raceNumber != null && String(info.raceNumber).trim() !== "") return String(info.raceNumber);
+  // o LMU informa o numero do carro (entry.carNumber)
+  if (entry && entry.carNumber != null && String(entry.carNumber).trim() !== "") return String(entry.carNumber);
   return "";
 }
 
@@ -272,8 +276,12 @@ function render() {
 
   // nome e cor da classe pelas mesmas regras da tabela
   const classBar = document.getElementById("classBar");
-  document.getElementById("className").textContent = classLabel(entry) || "—";
-  classBar.style.background = classColor(entry);
+  const classNameEl = document.getElementById("className");
+  classNameEl.textContent = classLabel(entry) || "—";
+  const classBg = classColor(entry);
+  classBar.style.background = classBg;
+  // texto preto ou branco conforme a cor da classe (ex: Super Trofeo e branca)
+  classNameEl.style.color = LLGColors.readableOnColor(classBg);
 
   const team = rltTeamName(entry);
   document.getElementById("driverName").textContent = rltDisplayName(entry) || entry.name || "—";
@@ -284,7 +292,8 @@ function render() {
   setBgLogo(document.getElementById("bgLogo"), team, entry.carName);
 
   const stats = document.getElementById("stats");
-  if (standingsView) {
+  // pontuacao so com temporada do RLT aplicada
+  if (standingsView && rltConfig && rltConfig.standingsRows && rltConfig.standingsRows.length) {
     const row = findStandingsRow(entry);
     const champPos = row && row.position != null ? row.position : "—";
     const pts = row && row.points != null ? row.points : "—";
@@ -326,6 +335,16 @@ function render() {
   }
 }
 
+// O servidor manda a "versao" dos arquivos da overlay ao conectar e de tempos
+// em tempos. Se ela mudar (programa atualizado, arquivo editado), a pagina se
+// recarrega sozinha, para o OBS nunca ficar rodando codigo antigo.
+let overlayBuildId = null;
+function checkBuildId(id) {
+  if (!id) return;
+  if (overlayBuildId === null) overlayBuildId = id;
+  else if (id !== overlayBuildId) location.reload();
+}
+
 function connect() {
   const socket = new WebSocket(WS_URL);
   socket.addEventListener("message", (ev) => {
@@ -335,6 +354,7 @@ function connect() {
         const payload = msg.data;
         const list = Array.isArray(payload) ? payload : payload && payload.standings;
         latestStandings = Array.isArray(list) ? list : [];
+        LLGDisplay.applyGameClassNames(latestStandings, payload && payload.game);
         if (rltMatcher) rltMatcher.prime(latestStandings.map((e) => e.name));
         const session = Array.isArray(payload) ? null : payload && payload.session;
         if (session && session.state != null) {
@@ -342,6 +362,8 @@ function connect() {
           latestSessionState = Number.isNaN(st) ? null : st;
         }
         render();
+      } else if (msg.type === "hello") {
+        checkBuildId(msg.buildId);
       } else if (msg.type === "rltConfig") {
         rltConfig = msg.data || null;
         rebuildRltMatcher();
@@ -353,6 +375,9 @@ function connect() {
         const name = msg.name;
         if (name === "overlay.toggleStandings") {
           standingsView = !standingsView;
+          render();
+        } else if (name === "overlay.setStandings") {
+          standingsView = !!(msg.payload && msg.payload.value);
           render();
         } else if (name === "overlay.prevColumn" || name === "overlay.nextColumn") {
           if (standingsView) {
@@ -367,7 +392,8 @@ function connect() {
       }
     } catch (_) {}
   });
-  socket.addEventListener("close", () => setTimeout(connect, 2000));
+  // servidor reiniciando: tenta de novo logo, para a overlay voltar rapido
+  socket.addEventListener("close", () => setTimeout(connect, 500));
 }
 
 connect();

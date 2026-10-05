@@ -1,16 +1,23 @@
 {
-  "name": "ams2-overlay",
+  "name": "llg-overlay",
   "version": "0.1.0",
-  "description": "Overlay custom para AMS2 com ponte WebSocket e integracao OBS",
-  "main": "server/index.js",
+  "description": "Overlays de transmissao para o Automobilista 2: tabela de tempos, driver card e tabela do piloto",
+  "main": "app/main.js",
   "type": "commonjs",
   "scripts": {
     "start": "node server/index.js",
+    "app": "node app/dev.js",
+    "build": "node app/build.mjs",
     "test": "node --test"
   },
   "dependencies": {
     "express": "^4.19.2",
-    "ws": "^8.17.0",
-    "obs-websocket-js": "^5.0.6"
-  }
+    "obs-websocket-js": "^5.0.6",
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.5.1"
+  },
+  "productName": "LLG Overlay"
 }

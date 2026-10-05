@@ -397,3 +397,96 @@ html, body {
 #timing-table.clock-left {
   left: 32px;
 }
+
+/* ---- Le Mans Ultimate: pneus e energia virtual (VE) ao lado da tabela ----
+   Ficam FORA da tabela, a direita de cada linha (como o relogio da volta
+   mais rapida). Os elementos sao criados por updateLmuSide() em
+   timing-table.js. A tabela nao muda de largura; a fonte do OBS precisa de
+   uns 650 px para caber tabela + pneus/VE + relogio. */
+.lmu-side {
+  position: absolute;
+  box-sizing: border-box;
+  width: 70px; /* igual a LMU_SIDE_WIDTH em timing-table.js */
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  align-items: center;
+  /* sem fundo: so o pneu e o numero, com sombra para ler sobre a imagem do jogo */
+  background: none;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.95), 0 1px 2px rgba(0, 0, 0, 0.95);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.lmu-side.visible {
+  visibility: visible;
+}
+
+.lmu-side .tyre {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+/* compostos diferentes na frente e atras: dois circulos menores, encostados */
+.lmu-side .tyre.pair {
+  gap: 0;
+}
+
+.lmu-side .tyre.pair .tyre-badge {
+  width: 15px;
+  height: 15px;
+  border-width: 2px;
+  font-size: 8px;
+}
+
+.lmu-side .energy {
+  text-align: right;
+  padding-right: 3px;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lmu-side .energy.mid { color: #ffd21f; }
+.lmu-side .energy.low { color: #ff5a5a; }
+
+/* titulos "Pneu" e "VE", na altura do cabecalho da tabela */
+.lmu-side.head {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.lmu-side.head .energy {
+  font-size: 10px;
+}
+
+/* ?clock=left no LMU: abre espaco a esquerda para pneus/VE + relogio */
+#timing-table.clock-left.game-lmu {
+  left: 106px;
+}
+
+/* "pneu": circulo com a letra do composto, na cor do composto */
+.tyre-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 3px solid #999;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+/* cores do Le Mans Ultimate: macio branco, medio amarelo, duro vermelho */
+.tyre-badge.soft { border-color: #f2f2f2; }
+.tyre-badge.medium { border-color: #ffd21f; }
+.tyre-badge.hard { border-color: #ff3b3b; }
+.tyre-badge.wet { border-color: #3d9bff; }
+

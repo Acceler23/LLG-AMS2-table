@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createGapTracker } = require("../overlay/shared/gaps");
+const { createGapTracker, createGapSmoother } = require("../overlay/shared/gaps");
 
 const TRACK = 4000;
 
@@ -78,4 +78,39 @@ test("salto impossivel de distancia e ignorado", () => {
   run(t, cars, 2, () => 50);
   const g = t.gap("B", "A", TRACK);
   assert.ok(Math.abs(g.sec - 2.0) < 0.1, `gap ${JSON.stringify(g)}`);
+});
+
+// conta quantas vezes o numero mostrado muda ao longo de uma serie de leituras
+function changes(values) {
+  let n = 0;
+  for (let i = 1; i < values.length; i++) if (values[i] !== values[i - 1]) n++;
+  return n;
+}
+
+test("gap parado com ruido: o numero na tela nao fica piscando", () => {
+  const s = createGapSmoother();
+  const raw = [];
+  const shown = [];
+  // gap real 2.55 s (bem no limite entre 2.5 e 2.6), com ruido de +-0.04, a 8 leituras por segundo
+  for (let i = 0; i < 160; i++) {
+    const v = 2.55 + (i % 2 === 0 ? 0.04 : -0.04);
+    raw.push(Math.round(v * 10) / 10);
+    shown.push(s.value("B>A", v, i * 125));
+  }
+  assert.ok(changes(raw) > 100, "sem suavizar, o digito troca a cada leitura");
+  assert.ok(changes(shown) <= 1, `trocas na tela: ${changes(shown)}`);
+});
+
+test("gap mudando de verdade: o numero acompanha", () => {
+  const s = createGapSmoother();
+  let shown = 0;
+  // de 2.0 para 3.0 em 10 segundos
+  for (let i = 0; i <= 80; i++) shown = s.value("B>A", 2 + i / 80, i * 125);
+  assert.ok(Math.abs(shown - 3.0) <= 0.2, `mostrado ${shown}`);
+});
+
+test("salto grande (ultrapassagem, box) aparece na hora", () => {
+  const s = createGapSmoother();
+  for (let i = 0; i < 20; i++) s.value("B>A", 2.0, i * 125);
+  assert.equal(s.value("B>A", 9.4, 20 * 125), 9.4);
 });

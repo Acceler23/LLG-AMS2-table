@@ -4,7 +4,7 @@
 # usando os metodos prontos do .NET (MemoryMappedFile / MemoryMappedViewAccessor)
 # -- sem precisar escrever C# ou usar addons nativos.
 #
-# Os offsets abaixo vem da struct oficial (SharedMemory.h) que a Reiza
+# Os offsets abaixo vem da struct oficial (SharedMemory_AMS2.h) que a Reiza
 # distribui junto do jogo. Le a cada ~130ms e manda o resultado (em JSON) pro
 # servidor Node via TCP, com um prefixo de 4 bytes indicando o tamanho.
 #
@@ -18,7 +18,10 @@ param(
     [string]$BridgeHost = "127.0.0.1",
     [int]$BridgePort = 5607,
     # pausa entre leituras; cada ciclo leva essa pausa + ~30 ms de trabalho
-    [int]$IntervalMs = 100
+    [int]$IntervalMs = 100,
+    # PID do aplicativo que iniciou este script. Se ele fechar (ou travar),
+    # o script encerra sozinho em vez de ficar rodando escondido.
+    [int]$ParentPid = 0
 )
 
 $mapName = $MapName
@@ -238,10 +241,55 @@ function Read-Snapshot {
 }
 
 $lastSessionKey = $null
+$lastNoDataMsg = $null
+
+# ---- Assetto Corsa Competizione ----
+# Os dados do ACC nao passam por aqui (o servidor fala direto com a API de
+# transmissao do jogo). Mas o servidor precisa saber QUANDO ha uma sessao
+# aberta, porque o ACC le um pedido de conexao de cada vez, bem devagar, e nao
+# pode receber pedidos repetidos. O estado esta na Shared Memory do ACC
+# (Local\acpmf_graphics, campo status: 0 = fora de sessao), entao este
+# listener, que ja esta sempre rodando, avisa o servidor quando ele muda.
+$script:accLive = $null
+$script:accCheckedAt = [DateTime]::MinValue
+$script:accSentAt = [DateTime]::MinValue
+
+function Test-AccLive {
+    try {
+        $m = [System.IO.MemoryMappedFiles.MemoryMappedFile]::OpenExisting('Local\acpmf_graphics')
+        $v = $m.CreateViewAccessor(0, 16, [System.IO.MemoryMappedFiles.MemoryMappedFileAccess]::Read)
+        $status = $v.ReadInt32(4)
+        $v.Dispose(); $m.Dispose()
+        return ($status -gt 0)
+    } catch {
+        return $false   # jogo fechado
+    }
+}
+
+function Send-AccStatus($stream) {
+    $now = [DateTime]::UtcNow
+    if (($now - $script:accCheckedAt).TotalMilliseconds -lt 400) { return }
+    $script:accCheckedAt = $now
+    $live = Test-AccLive
+    # manda quando muda, e repete a cada 3 s para o servidor nao perder o estado
+    if ($live -eq $script:accLive -and ($now - $script:accSentAt).TotalSeconds -lt 3) { return }
+    $script:accLive = $live
+    $script:accSentAt = $now
+    $json = '{"accStatus":{"live":' + $(if ($live) { 'true' } else { 'false' }) + '}}'
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+    $len = [BitConverter]::GetBytes([int32]$bytes.Length)
+    if ([BitConverter]::IsLittleEndian) { [Array]::Reverse($len) }
+    $stream.Write($len, 0, 4)
+    $stream.Write($bytes, 0, $bytes.Length)
+}
 
 Write-Host "Bridge (Shared Memory) iniciando..."
 
 while ($true) {
+    if ($ParentPid -gt 0 -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) {
+        Write-Host "Aplicativo fechado, encerrando o listener."
+        exit
+    }
     try {
         $tcp = New-Object System.Net.Sockets.TcpClient($bridgeHost, $bridgePort)
         $stream = $tcp.GetStream()
@@ -249,6 +297,7 @@ while ($true) {
 
         while ($tcp.Connected) {
             try {
+                Send-AccStatus $stream
                 if (-not (Read-Snapshot)) {
                     Start-Sleep -Milliseconds 20
                     continue
@@ -458,6 +507,7 @@ while ($true) {
                 $standingsSorted = @($standings | Sort-Object position)
 
                 $payload = [PSCustomObject]@{
+                    game    = "ams2"
                     session = [PSCustomObject]@{
                         state            = [int]$sessionState
                         label            = $SESSION_LABELS[[int]$sessionState]
@@ -479,17 +529,27 @@ while ($true) {
 
                 $stream.Write($lengthBytes, 0, 4)
                 $stream.Write($payloadBytes, 0, $payloadBytes.Length)
+                if ($lastNoDataMsg) {
+                    $lastNoDataMsg = $null
+                    Write-Host "Recebendo dados do jogo."
+                }
             }
             catch {
                 Close-SharedMemory
-                Write-Host "Sem dados agora (jogo fechado ou no menu?):" $_.Exception.Message
+                # avisa uma vez so (nao a cada ciclo) e espera mais antes de tentar de novo
+                $msg = $_.Exception.Message
+                if ($msg -ne $lastNoDataMsg) {
+                    $lastNoDataMsg = $msg
+                    Write-Host "Sem dados agora (jogo fechado ou no menu?):" $msg
+                }
+                Start-Sleep -Milliseconds 400
             }
 
             Start-Sleep -Milliseconds $IntervalMs
         }
     }
     catch {
-        Write-Host "Bridge: sem conexao com o Node, tentando de novo em 2s..." $_.Exception.Message
-        Start-Sleep -Seconds 2
+        Write-Host "Bridge: sem conexao com o Node, tentando de novo em 1s..." $_.Exception.Message
+        Start-Sleep -Seconds 1
     }
 }

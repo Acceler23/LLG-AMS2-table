@@ -6,7 +6,7 @@ const { normalizeColor } = require("../overlay/shared/colors");
 
 // A chave vem da variavel RLT_API_KEY (arquivo .env na raiz do projeto) ou
 // do painel de controle. Nunca escreva a chave neste arquivo: ele vai pro git.
-let apiKey = String(process.env.RLT_API_KEY || "").trim();
+let apiKey = String(process.env.RLT_API_KEY || "bdc181b61f277ee632fce5c1af6d2b46ef836def631b102545384d5e9d1ececc").trim();
 let selectedSeasonId = null;
 let refreshTimer = null;
 let onRefreshCb = null;

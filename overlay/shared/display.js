@@ -20,6 +20,8 @@
       defaultColor: typeof DEFAULT_COLOR !== "undefined" ? DEFAULT_COLOR : "rgb(0, 98, 255)",
       carLogos: typeof CAR_LOGOS !== "undefined" ? CAR_LOGOS : null,
       teamLogoOverrides: typeof TEAM_LOGO_OVERRIDES !== "undefined" ? TEAM_LOGO_OVERRIDES : {},
+      lmuClassNames: typeof LMU_CLASS_NAMES !== "undefined" ? LMU_CLASS_NAMES : {},
+      accClassNames: typeof ACC_CLASS_NAMES !== "undefined" ? ACC_CLASS_NAMES : {},
     };
   }
 
@@ -126,6 +128,20 @@
     return slug ? `${slug}.png` : null;
   }
 
+  // Troca o nome de classe que o jogo manda pelo nome usado no drivers-config
+  // (LMU_CLASS_NAMES / ACC_CLASS_NAMES), para nomes e cores de classe seguirem
+  // a configuracao. Chamado por cada overlay ao receber os dados; o AMS2 nao
+  // tem lista porque os nomes dele ja sao as chaves do drivers-config.
+  function applyGameClassNames(standings, game) {
+    const cfg = config();
+    const names = game === "lmu" ? cfg.lmuClassNames : game === "acc" ? cfg.accClassNames : null;
+    if (!names) return standings;
+    (standings || []).forEach((e) => {
+      if (e && e.carClass && names[e.carClass]) e.carClass = names[e.carClass];
+    });
+    return standings;
+  }
+
   // Caminhos a tentar para o logo de um piloto: equipe primeiro, depois carro.
   function logoPaths(teamName, carName, localOverrides) {
     const carFile = carLogo(carName) || carLogoFromTeam(teamName);
@@ -144,5 +160,6 @@
     carLogoFromTeam,
     teamLogoFile,
     logoPaths,
+    applyGameClassNames,
   };
 });

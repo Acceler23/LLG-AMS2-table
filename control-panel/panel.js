@@ -6,6 +6,24 @@ socket.addEventListener("open", () => {
   refreshStatus();
 });
 
+// O servidor avisa quando uma temporada e aplicada, inclusive a que ele
+// reaplica sozinho ao abrir. O painel acompanha para mostrar a selecao certa.
+socket.addEventListener("message", async (ev) => {
+  let msg;
+  try {
+    msg = JSON.parse(ev.data);
+  } catch (_) {
+    return;
+  }
+  if (msg.type !== "rltConfig" || !msg.data || !msg.data.seasonId) return;
+  const sel = document.getElementById("rltSeason");
+  const id = String(msg.data.seasonId);
+  if (!Array.from(sel.options).some((o) => o.value === id)) await reloadSeasons();
+  sel.value = id;
+  renderClasses(msg.data.classes || []);
+  renderTeamLogos(msg.data.standingsRows || []);
+});
+
 function send(name, payload = {}) {
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "command", name, payload }));
@@ -241,8 +259,99 @@ async function refreshStatus() {
     const body = await api("/api/rlt/status");
     document.getElementById("rltStatus").textContent = JSON.stringify(body, null, 0);
     if (body.hasKey) {
-      reloadSeasons();
-      }
+      await reloadSeasons();
+      // a temporada aplicada (inclusive a reaplicada ao abrir) aparece selecionada
+      if (body.selectedSeasonId) document.getElementById("rltSeason").value = String(body.selectedSeasonId);
+    }
   } catch (_) {}
   loadAssetsBase();
+}
+
+// ---------------------------------------------------------------- alternancia automatica
+// Posicoes da sessao <-> pontuacao. O servidor guarda a escolha e faz a troca.
+function showAlternateSeconds(value) {
+  document.getElementById("altSecondsVal").textContent = `${value} s`;
+}
+
+function showAlternate(body) {
+  document.getElementById("altEnabled").checked = !!body.enabled;
+  document.getElementById("altSeconds").value = body.seconds;
+  showAlternateSeconds(body.seconds);
+}
+
+async function setAlternate() {
+  try {
+    const body = await api("/api/overlay/alternate", {
+      method: "POST",
+      body: JSON.stringify({
+        enabled: document.getElementById("altEnabled").checked,
+        seconds: Number(document.getElementById("altSeconds").value),
+      }),
+    });
+    showAlternate(body);
+    log(body.enabled ? `Alternando posições e pontuação a cada ${body.seconds} s` : "Alternância desligada");
+  } catch (e) {
+    log("ERRO alternância: " + e.message);
+  }
+}
+
+api("/api/overlay/alternate").then(showAlternate).catch(() => {});
+
+// ---------------------------------------------------------------- links das overlays
+function fillLinks() {
+  const base = `http://localhost:${location.port || 8080}`;
+  document.getElementById("linkTable").value = `${base}/overlay/timing-table.html`;
+  document.getElementById("linkCard").value = `${base}/overlay/driver-card.html`;
+  document.getElementById("linkDriver").value = `${base}/overlay/driver-table.html`;
+}
+
+async function copyLink(id) {
+  const input = document.getElementById(id);
+  input.select();
+  try {
+    await navigator.clipboard.writeText(input.value);
+  } catch (_) {
+    document.execCommand("copy");
+  }
+  log("Link copiado: " + input.value);
+}
+
+fillLinks();
+
+// ---------------------------------------------------------------- aplicativo (.exe)
+// window.llgApp so existe quando o painel roda dentro do aplicativo.
+let driverWindowState = null;
+
+function showDriverWindowState(s) {
+  driverWindowState = s;
+  document.getElementById("drvVisible").checked = !!s.visible;
+  const pct = Math.round((s.scale || 1) * 100);
+  document.getElementById("drvScale").value = pct;
+  document.getElementById("drvScaleVal").textContent = pct + "%";
+  const edit = document.getElementById("drvEdit");
+  edit.textContent = s.edit ? "Travar posição" : "Mover";
+  edit.disabled = !s.visible;
+  document.getElementById("drvHint").textContent = s.edit
+    ? "Arraste a área azul pontilhada até o lugar desejado e clique em Travar posição."
+    : "Travada: os cliques passam direto para o jogo.";
+}
+
+async function setDriverWindow(patch) {
+  if (!window.llgApp) return;
+  showDriverWindowState(await window.llgApp.driver.set(patch));
+}
+
+function toggleDriverEdit() {
+  setDriverWindow({ edit: !(driverWindowState && driverWindowState.edit) });
+}
+
+function setDriverScale(value) {
+  const pct = Math.max(50, Math.min(200, Number(value) || 100));
+  document.getElementById("drvScaleVal").textContent = pct + "%";
+  setDriverWindow({ scale: pct / 100 });
+}
+
+if (window.llgApp) {
+  document.getElementById("appSection").hidden = false;
+  window.llgApp.driver.get().then(showDriverWindowState);
 }

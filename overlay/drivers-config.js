@@ -136,6 +136,7 @@ const CLASS_COLORS = {
   "Montana": "#ae8136",
   "CopaUno": "#f6f95d",
   "DPI": "#ed5a00",
+  "Ferrari Challenge": "#f50303",
   "F-Hitech_Gen1": "#40bbff",
   "F-Hitech_Gen2": "#c63232",
   "F-3": "#37a2d6",
@@ -177,15 +178,17 @@ const CLASS_COLORS = {
   "GTOpen": "#d50000",
   "GT1": "#cdcdcd",
   "GT1_05": "#46d4f2",
+  "GT2": "#f0ca19",
   "GT2_05": "#f0ca19",
   "GT3": "#006630",
+  "LMGT3": "#006630",
   "GT3_Gen2": "#00a950",
   "GT4": "#5b616a",
   "GT5": "#3144e6",
+  "LMGTE": "#f0ca19",
   "GTE": "#ec0030",
   "GTR_04": "#dae1e2",
   "Hot Cars": "#f2e2b4",
-  "Hypercars": "#eaca62",
   "Kart125cc": "#2cb06e",
   "KartGX390": "#4adad9",
   "KartRental": "#f03232",
@@ -194,10 +197,14 @@ const CLASS_COLORS = {
   "LancerCup": "#da171b",
   "LES_2025": "#dcac03",
   "LMDh": "#3f4349",
+  "Hypercars": "#eaca62", // AMS2: hipercarros de rua
+  "Hypercar": "#aa0000", // LMU: classe Hypercar (LMH/LMDh), ver LMU_CLASS_NAMES
   "LMP1_05": "#f22a3e",
   "LMP2_05": "#e5e25c",
   "LMP2_Gen1": "#3144e6",
   "LMP2": "#3852a4",
+  "LMP3": "#6d076d",
+  "LMP2 ELMS": "#163dbb",
   "MiniChallenge": "#dddddd",
   "OldStock": "#ffcb06",
   "Opala79": "#8c4ab0",
@@ -207,6 +214,7 @@ const CLASS_COLORS = {
   "P2": "#bf9e14",
   "P3": "#1e1e1e",
   "P4": "#b946bc",
+  "Porsche Cup": "#ce0a24",
   "Carrera Cup": "#ce0a24",
   "Procar": "#353188",
   "RX": "#9dd000",
@@ -230,6 +238,7 @@ const CLASS_COLORS = {
   "Supercars": "#c7c7c7",
   "SuperKart": "#0a61ce",
   "TSICup": "#001e50",
+  "TCX": "#0065b1",
   "TC60S": "#df8826",
   "TC60S2": "#a2a2a1",
 
@@ -253,6 +262,14 @@ const CLASS_COLORS = {
 const DEFAULT_COLOR = "rgb(0, 98, 255)";
 
 const CAR_LOGOS = {
+  // marcas do Le Mans Ultimate que faltavam (a chave e a primeira palavra do modelo)
+  "Lexus": "lexus.png",
+  "Corvette": "chevrolet.png",
+  "Genesis": "genesis.png",
+  "Glickenhaus": "glickenhaus.png",
+  "Vanwall": "vanwall.png",
+  "Duqueine": "duqueine.png",
+  "Isotta": "isotta.fraschini.png",
   //Acura
   "Acura": "acura.png",
   //Alpine
@@ -261,6 +278,8 @@ const CAR_LOGOS = {
   "Aston": "aston_martin.png",
   //Audi
   "Audi": "audi.png",
+  //Bentley
+  "Bentley": "bentley.png",
   //BMw
   "BMW": "bmw.png",
   //Brabham
@@ -311,9 +330,13 @@ const CAR_LOGOS = {
   "Reynard 2Ki Honda": "honda.png",
   //Iveco
   "Iveco": "iveco.png",
+  //Jaguar
+  "Jaguar": "jaguar.png",
   //Judd
   "Judd": "judd.png",
   "MetalMoro AJR Judd": "judd.png",
+  //KTM
+  "KTM": "ktm.png",
   //Lamborghini
   "Lamborghini": "lamborghini.png",
   //Ligier
@@ -413,3 +436,29 @@ const SPLIT_BY_CAR_CLASSES = [
   "LES_2025",
   "TSICup",
 ];
+
+// Le Mans Ultimate: nome que o jogo da a cada classe -> nome usado aqui.
+// O nome da direita e o que vale em CLASS_NAME_OVERRIDES e CLASS_COLORS, entao
+// as cores das classes do LMU sao as definidas la em cima para esses nomes.
+// So se aplica a dados do LMU; o "GT3" do AMS2 continua sendo "GT3".
+const LMU_CLASS_NAMES = {
+  "Hyper": "Hypercar",
+  "GT3": "LMGT3",
+  "LMP2": "LMP2",
+  "GTE": "LMGTE",
+};
+
+// Assetto Corsa Competizione: classe que o programa da a cada carro -> nome
+// usado aqui (o que vale em CLASS_NAME_OVERRIDES e CLASS_COLORS). O ACC nao
+// informa a classe; ela vem do modelo do carro (server/accClient.js):
+// GT3, GT4, GT2, CUP (Porsche Cup), ST (Super Trofeo), CHL (Ferrari
+// Challenge) e TCX (BMW M2).
+const ACC_CLASS_NAMES = {
+  "GT3": "GT3",
+  "GT4": "GT4",
+  "GT2": "GT2",
+  "CUP": "Porsche Cup",
+  "ST": "Super Trofeo",
+  "CHL": "Ferrari Challenge",
+  "TCX": "TCX",
+};

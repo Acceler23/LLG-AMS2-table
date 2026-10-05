@@ -43,6 +43,15 @@ function uniquifyNames(standings) {
   return standings;
 }
 
+// Chave do estado de cada carro. Quando o jogo informa o numero do carro (ACC,
+// LMU), o estado pertence ao CARRO: numa troca de piloto o nome muda, mas a
+// posicao de largada, as paradas e o stint continuam os mesmos. Sem numero
+// (AMS2), vale o nome do piloto, como sempre foi.
+function stateKey(entry) {
+  if (entry.carNumber != null && entry.carNumber !== "" && entry.slot != null) return `car:${entry.slot}#${entry.carNumber}`;
+  return entry.name;
+}
+
 function createRaceState(clock) {
   const now = clock || Date.now;
 
@@ -130,7 +139,7 @@ function createRaceState(clock) {
     }
 
     if (!baselineLocked) {
-      startPositions = new Map(standings.map((e) => [e.name, e.position]));
+      startPositions = new Map(standings.map((e) => [stateKey(e), e.position]));
       // trava quando o pelotao se mexe; ate la o grid ainda pode mudar
       if (standings.some((e) => typeof e.speedMs === "number" && e.speedMs > 3)) baselineLocked = true;
     }
@@ -139,7 +148,7 @@ function createRaceState(clock) {
 
     standings.forEach((entry) => {
       if (!entry || !entry.name) return;
-      const name = entry.name;
+      const name = stateKey(entry);
       entry.startPosition = startPositions.has(name) ? startPositions.get(name) : null;
 
       let st = pit.get(name);
@@ -155,7 +164,8 @@ function createRaceState(clock) {
       entry.pit = {
         phase: timer ? timer.phase : null,
         elapsedMs: timer ? (timer.phase === "done" ? timer.finalMs : t - timer.enteredAt) : null,
-        stops: st.stops,
+        // o LMU informa as paradas de cada carro (entry.pitStops); o AMS2 nao, entao contamos
+        stops: typeof entry.pitStops === "number" ? entry.pitStops : st.stops,
         stintLaps: st.stintLaps,
         outLap:
           inPitNow ||

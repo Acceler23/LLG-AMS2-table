@@ -1,0 +1,190 @@
+/* Tabela do piloto: versao compacta para quem esta pilotando.
+   Desenhada para 340 px de largura; driver-table.js aplica zoom para
+   acompanhar a largura da janela/fonte. */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: transparent;
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: #fff;
+  overflow: hidden;
+}
+
+#driver-table {
+  width: 340px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(8, 30, 56, 0.86);
+  border: 1px solid rgba(0, 197, 253, 0.55);
+  font-variant-numeric: tabular-nums;
+}
+
+#driver-table.hidden { display: none; }
+
+.dt-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 10px;
+  background: rgba(10, 45, 82, 0.95);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+.dt-head {
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* legenda das classes: uma etiqueta com a cor de cada classe na pista */
+.dt-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px 6px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.dt-chip {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* titulos das colunas: geral, classe, (pontos), intervalo */
+.dt-cols {
+  display: grid;
+  grid-template-columns: 26px 24px 1fr 62px;
+  padding: 1px 0;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.dt-cols.with-pts {
+  grid-template-columns: 26px 24px 1fr 42px 62px;
+}
+
+.dt-head-col.center { text-align: center; }
+
+/* cabecalho da classe com os titulos das colunas de pontos e intervalo */
+.dt-head.with-pts {
+  display: grid;
+  grid-template-columns: 1fr 42px 62px;
+  align-items: center;
+  padding: 2px 0 2px 10px;
+}
+
+.dt-head-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dt-head-col {
+  text-align: right;
+  font-size: 9px;
+  font-weight: 700;
+  opacity: 0.8;
+  text-transform: lowercase;
+}
+
+.dt-head-col.gap { padding-right: 8px; }
+
+.dt-head.points {
+  background: rgba(0, 0, 0, 0.45);
+  color: #7ec8ff;
+  border-top: 1px solid rgba(0, 197, 253, 0.35);
+  margin-top: 2px;
+}
+
+.dt-row {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  align-items: center;
+  height: 22px;
+  font-size: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* linha com a coluna de pontos do campeonato ao lado do nome */
+.dt-row.with-pts {
+  grid-template-columns: 26px 1fr 42px 62px;
+}
+
+.dt-pts {
+  text-align: right;
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffd75e;
+}
+
+/* linha com posicao geral + posicao na classe */
+.dt-row.with-class {
+  grid-template-columns: 26px 24px 1fr auto;
+}
+
+.dt-row.with-class.with-pts {
+  grid-template-columns: 26px 24px 1fr 42px 62px;
+}
+
+/* posicao geral: caixa neutra; a cor fica na caixa da classe ao lado */
+.dt-pos.overall {
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+}
+
+.dt-pos.class {
+  font-size: 12px;
+}
+
+.dt-row.me {
+  background: rgba(0, 107, 221, 0.85);
+  font-weight: 700;
+}
+
+.dt-row.dnf { opacity: 0.5; }
+
+/* linhas puladas entre o lider e os carros em volta do piloto */
+.dt-row.skip {
+  height: 5px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.3);
+}
+
+.dt-pos {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.dt-name {
+  padding: 0 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.dt-val {
+  padding: 0 8px 0 4px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.dt-val .add { opacity: 0.75; font-size: 12px; }
+.dt-val .up { color: #3dff7a; font-weight: 700; }
+.dt-val .down { color: #ff5a5a; font-weight: 700; }
+.dt-val.pit { color: #5eb8ff; font-weight: 700; }
+.dt-val.dnf { color: #ff6b6b; font-weight: 700; }
