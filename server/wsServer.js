@@ -6,8 +6,9 @@
 
 const { WebSocketServer } = require("ws");
 
-function createWsServer(httpServer) {
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+function createWsServer(httpServer, options) {
+  const opts = options || {};
+  const wss = new WebSocketServer({ server: httpServer, path: "/ws", verifyClient: opts.verifyClient });
 
   const clients = new Set();
   const commandHandlers = new Map(); // registrado por outros modulos (ex: obsController)

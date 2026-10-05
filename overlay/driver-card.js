@@ -2,63 +2,49 @@ const WS_URL = `ws://${location.hostname}:${location.port || 8080}/ws`;
 
 let rltConfig = null;
 let latestStandings = [];
+let latestSessionState = null; // 1 treino, 2 teste, 3 classificacao, 5 corrida, 6 time attack
 let standingsView = false;
 let standingsColumnIndex = 0;
 const STANDINGS_COLUMN_MODES = ["Pts", "Pts proj.", "Gap líder"];
 
-let startOverall = null;
-let baselineLocked = false;
 let stablePlayerName = null;
 let pendingPlayerName = null;
 let pendingPlayerSince = 0;
-const PLAYER_STABLE_MS = 800;
+// Troca de piloto em foco: vale assim que duas leituras seguidas do jogo
+// concordam (~0,13 s cada). Uma leitura isolada e ignorada, para a camera
+// passando por outro carro nao fazer o destaque piscar.
+const PLAYER_STABLE_MS = 100;
 
-let logoBaseUrl = "";
-let logoCacheBust = "";
+// Fonte online primeiro, pasta local overlay/assets como reserva.
+const logoLoader = LLGLogos.createLoader("assets");
 let teamLogoOverrides = {};
 try {
   const saved = localStorage.getItem("teamLogoOverrides");
   if (saved) teamLogoOverrides = JSON.parse(saved) || {};
 } catch (_) {}
 
-const rltLookupCache = new Map();
+const normalizeDriverName = LLGNames.normalizeName;
+const nameCandidates = LLGNames.nameCandidates;
 
-function normalizeDriverName(name) {
-  return String(name || "")
-    .replace(/\[[^\]]*\]/g, "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[|\/\\]+/g, " ")
-    .replace(/\./g, " ")
-    .replace(/[^a-zA-Z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+// Mesmo casador da tabela (shared/names.js), para o card e a tabela
+// mostrarem sempre o mesmo piloto.
+let rltMatcher = null;
+
+function rebuildRltMatcher() {
+  const hasDrivers =
+    rltConfig &&
+    ((rltConfig.drivers && rltConfig.drivers.length) || (rltConfig.standingsRows && rltConfig.standingsRows.length));
+  rltMatcher = hasDrivers
+    ? LLGNames.createMatcher(LLGNames.buildPool(rltConfig), {
+        explicitMap: typeof RLT_INGAME_MAP !== "undefined" ? RLT_INGAME_MAP : null,
+      })
+    : null;
+  if (rltMatcher) rltMatcher.prime(latestStandings.map((e) => e.name));
 }
 
-function nameCandidates(raw) {
-  const parts = String(raw || "")
-    .split(/[|\/\\]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (!parts.length) parts.push(String(raw || ""));
-  const out = new Set();
-  parts.forEach((p) => {
-    const n = normalizeDriverName(p);
-    if (n) out.add(n);
-  });
-  const full = normalizeDriverName(raw);
-  if (full) out.add(full);
-  return Array.from(out);
-}
-
-function teamSlug(name) {
-  return String(name || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_|_$/g, "");
+function rltLookup(entry) {
+  if (!rltMatcher || !entry) return null;
+  return rltMatcher.lookup(entry.name || "");
 }
 
 function ordinal(n) {
@@ -81,158 +67,11 @@ function formatTime(ms) {
   return s.toFixed(3);
 }
 
-function manufacturerName(carName) {
-  return (carName || "").split(" ")[0];
-}
-
-function carLogo(carName) {
-  if (typeof CAR_LOGOS === "undefined") return undefined;
-  return CAR_LOGOS[manufacturerName(carName)] || CAR_LOGOS[carName];
-}
-
-function carLogoFromTeam(teamName) {
-  if (typeof CAR_LOGOS === "undefined" || !teamName) return null;
-  const slug = teamSlug(teamName);
-  for (const key of Object.keys(CAR_LOGOS)) {
-    if (teamSlug(key) === slug) return CAR_LOGOS[key];
-  }
-  return null;
-}
-
-function teamLogoFile(teamName) {
-  if (!teamName) return null;
-  if (teamLogoOverrides[teamName]) return teamLogoOverrides[teamName];
-  return `${teamSlug(teamName)}.png`;
-}
-
-function logoUrl(relPath) {
-  if (!relPath) return null;
-  const rel = String(relPath).replace(/^\/+/, "");
-  const base = (logoBaseUrl || "assets").replace(/\/+$/, "");
-  let url = `${base}/${rel}`;
-  if (logoCacheBust) url += (url.includes("?") ? "&" : "?") + "v=" + encodeURIComponent(logoCacheBust);
-  return url;
-}
-
-function resolveLogoSrc(teamName, carName) {
-  const carFile = carLogo(carName) || carLogoFromTeam(teamName);
-  const teamFile = teamLogoFile(teamName);
-  const teamSrc = teamFile ? logoUrl(`teams/${teamFile}`) : null;
-  const carSrc = carFile ? logoUrl(`cars/${carFile}`) : null;
-  if (teamSrc) return { src: teamSrc, fallback: carSrc };
-  if (carSrc) return { src: carSrc, fallback: null };
-  return null;
-}
-
+// Mesmas regras de logo da tabela (shared/display.js), incluindo a lista
+// TEAM_LOGO_OVERRIDES do drivers-config.js.
 function setBgLogo(img, teamName, carName) {
   if (!img) return;
-  const res = resolveLogoSrc(teamName, carName);
-  if (!res) {
-    img.style.display = "none";
-    img.removeAttribute("src");
-    return;
-  }
-  if (img.dataset.src === res.src && img.style.display !== "none") return;
-  img.onload = () => {
-    img.style.display = "";
-    img.dataset.src = res.src;
-  };
-  img.onerror = () => {
-    if (res.fallback && img.dataset.tried !== res.fallback) {
-      img.dataset.tried = res.fallback;
-      img.src = res.fallback;
-      return;
-    }
-    img.style.display = "none";
-    img.removeAttribute("src");
-  };
-  img.dataset.tried = res.src;
-  img.src = res.src;
-}
-
-function rltDriverPool() {
-  const list = [];
-  const seen = new Set();
-  function add(d) {
-    if (!d) return;
-    const key = normalizeDriverName(d.displayName || d.driverName || `${d.firstName || ""} ${d.lastName || ""}`);
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    list.push(d);
-  }
-  if (!rltConfig) return list;
-  (rltConfig.drivers || []).forEach(add);
-  (rltConfig.standingsRows || []).forEach((row) => {
-    add({
-      displayName: row.displayName,
-      driverName: row.driverName,
-      inGameName: row.inGameName,
-      firstName: row.firstName,
-      lastName: row.lastName,
-      teamName: row.teamName,
-      raceNumber: row.raceNumber,
-      aliases: row.aliases || [],
-      uniqueName: row.classUniqueName,
-      name: row.className,
-      color: row.color,
-      position: row.position,
-      points: row.points,
-      pointsRaw: row.pointsRaw,
-      gapToLeader: row.gapToLeader,
-    });
-  });
-  return list;
-}
-
-function scoreAlias(target, targetTokens, targetLast, al) {
-  if (!al) return 0;
-  let score = 0;
-  const alTokens = al.split(" ").filter(Boolean);
-  const alLast = alTokens[alTokens.length - 1] || "";
-  const alFirst = alTokens[0] || "";
-  if (target === al) return 1;
-  if (targetLast && alLast && targetLast === alLast && targetLast.length >= 3) score = Math.max(score, 0.98);
-  if (target.includes(al) || al.includes(target)) {
-    const ratio = Math.min(target.length, al.length) / Math.max(target.length, al.length);
-    if (ratio >= 0.75) score = Math.max(score, Math.max(ratio, 0.9));
-  }
-  return score;
-}
-
-function rltLookup(entry) {
-  if (!rltConfig || (!rltConfig.drivers?.length && !rltConfig.standingsRows?.length)) return null;
-  const raw = entry.name || "";
-  if (rltLookupCache.has(raw)) return rltLookupCache.get(raw);
-  const candidates = nameCandidates(raw).filter((t) => t && t !== "player");
-  if (!candidates.length) {
-    rltLookupCache.set(raw, null);
-    return null;
-  }
-  const pool = rltDriverPool();
-  let best = null;
-  let bestScore = 0;
-  for (const target of candidates) {
-    const targetTokens = target.split(" ").filter(Boolean);
-    const targetLast = targetTokens[targetTokens.length - 1] || "";
-    for (const d of pool) {
-      const extra = [];
-      if (d.driverName) extra.push(normalizeDriverName(d.driverName));
-      if (d.displayName) extra.push(normalizeDriverName(d.displayName));
-      if (d.inGameName) extra.push(normalizeDriverName(d.inGameName));
-      if (d.firstName || d.lastName) extra.push(normalizeDriverName(`${d.firstName || ""} ${d.lastName || ""}`));
-      if (d.lastName) extra.push(normalizeDriverName(d.lastName));
-      for (const al of [...(d.aliases || []), ...extra]) {
-        const score = scoreAlias(target, targetTokens, targetLast, al);
-        if (score > bestScore) {
-          bestScore = score;
-          best = d;
-        }
-      }
-    }
-  }
-  const hit = best && bestScore >= 0.98 ? best : null;
-  rltLookupCache.set(raw, hit);
-  return hit;
+  logoLoader.load(img, LLGDisplay.logoPaths(teamName, carName, teamLogoOverrides));
 }
 
 function rltDisplayName(entry) {
@@ -254,10 +93,57 @@ function rltTeamName(entry) {
   return entry.teamName || entry.carName || "";
 }
 
-function rltClassName(entry) {
+// Nome completo da equipe (so para exibir; os logos usam o nome curto).
+function rltTeamFullName(entry) {
   const info = rltLookup(entry);
-  if (info && info.name && info.name !== "—") return info.name;
-  return entry.carClass || entry.className || "";
+  return (info && info.teamFullName) || rltTeamName(entry);
+}
+
+const POS_DEFAULT_BG = "";
+
+// Coluna da posicao: degrade da cor primaria para a secundaria da equipe.
+// Cada numero recebe preto ou branco conforme a cor do degrade na altura em
+// que ele esta, mais um contorno na cor oposta, para nunca sumir no fundo.
+function paintPositionColumn(entry) {
+  const col = document.querySelector(".pos-col");
+  if (!col) return;
+  const info = rltLookup(entry);
+  const a = info && LLGColors.toRgb(info.teamPrimaryColor);
+  const b = (info && LLGColors.toRgb(info.teamSecondaryColor)) || a;
+  const targets = [
+    [document.getElementById("posClass"), 0.4],
+    [document.getElementById("posOverall"), 0.72],
+  ];
+  if (!a) {
+    // sem equipe no RLT: volta para o azul padrao do CSS
+    col.style.background = POS_DEFAULT_BG;
+    targets.forEach(([el]) => {
+      if (!el) return;
+      el.style.color = "";
+      el.style.textShadow = "";
+    });
+    return;
+  }
+  col.style.background = `linear-gradient(180deg, rgb(${a.join(",")}) 0%, rgb(${b.join(",")}) 100%)`;
+  targets.forEach(([el, at]) => {
+    if (!el) return;
+    const fg = LLGColors.readableOn(LLGColors.mix(a, b, at));
+    const outline = fg === "#000000" ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.85)";
+    el.style.color = fg;
+    el.style.textShadow = `0 0 2px ${outline}, 0 0 2px ${outline}, 0 0 4px ${outline}`;
+  });
+}
+
+// Nome da classe, igual ao cabecalho da tabela: classe do RLT quando ha
+// temporada, modelo do carro em classe dividida por carro, senao a classe do
+// jogo ja formatada (CLASS_NAME_OVERRIDES, sem sufixos tecnicos).
+function classLabel(entry) {
+  const key = grouper.key(entry, latestStandings);
+  if (rltEnabled()) {
+    const c = rltConfig.classes.find((x) => x.uniqueName === key || x.name === key);
+    if (c) return LLGDisplay.formatClassName(c.name || c.uniqueName);
+  }
+  return LLGDisplay.formatClassName(key);
 }
 
 function rltRaceNumber(entry) {
@@ -266,13 +152,9 @@ function rltRaceNumber(entry) {
   return "";
 }
 
-function classColor(key) {
-  if (rltConfig && rltConfig.classes) {
-    const c = rltConfig.classes.find((x) => x.uniqueName === key || x.name === key);
-    if (c && c.color) return c.color;
-  }
-  const info = null;
-  return "#0e42a5";
+// Mesma cor de classe da tabela (RLT, CLASS_COLORS ou cor derivada do nome).
+function classColor(entry) {
+  return LLGDisplay.classColor(grouper.key(entry, latestStandings), rltEnabled() ? rltConfig.classes : null);
 }
 
 function updateStablePlayer(standings) {
@@ -303,30 +185,37 @@ function updateStablePlayer(standings) {
   pendingPlayerSince = now;
 }
 
-function ensureBaselines(standings) {
-  const fieldMoving = (standings || []).some((e) => typeof e.speedMs === "number" && e.speedMs > 3);
-  if (!baselineLocked) {
-    startOverall = new Map((standings || []).map((e) => [e.name, e.position]));
-    if (fieldMoving) baselineLocked = true;
-  }
+function rltEnabled() {
+  return !!(rltConfig && rltConfig.classes && rltConfig.classes.length > 0);
 }
 
-
-function classKey(entry) {
-  const info = rltLookup(entry);
-  if (info && info.uniqueName && info.uniqueName !== "—") return info.uniqueName;
-  return entry.carClass || entry.className || "—";
-}
+// Mesma regra de classe da tabela (shared/groups.js), incluindo as classes
+// divididas por modelo de carro (SPLIT_BY_CAR_CLASSES em drivers-config.js).
+const grouper = LLGGroups.createGrouper({
+  rltEnabled: () => rltEnabled(),
+  lookup: (entry) => rltLookup(entry),
+  splitClasses: typeof SPLIT_BY_CAR_CLASSES !== "undefined" ? SPLIT_BY_CAR_CLASSES : [],
+});
 
 function classPosition(entry, standings) {
-  if (!entry) return null;
-  const key = classKey(entry);
-  const list = (standings || [])
-    .filter((e) => classKey(e) === key)
-    .slice()
-    .sort((a, b) => (a.position || 999) - (b.position || 999));
-  const idx = list.findIndex((e) => e.name === entry.name);
-  return idx >= 0 ? idx + 1 : null;
+  return grouper.position(entry, standings);
+}
+
+function isTimedSession() {
+  return latestSessionState === 1 || latestSessionState === 2 || latestSessionState === 3 || latestSessionState === 6;
+}
+
+// Diferenca da melhor volta do piloto para a melhor volta da classe dele.
+function classLeaderGap(entry, standings) {
+  const mine = Number(entry.fastestLapMs);
+  if (!(mine > 0)) return "—";
+  const key = grouper.key(entry, standings);
+  let best = mine;
+  (standings || []).forEach((e) => {
+    if (e.fastestLapMs > 0 && e.fastestLapMs < best && grouper.key(e, standings) === key) best = e.fastestLapMs;
+  });
+  if (mine <= best) return "Líder";
+  return `+${((mine - best) / 1000).toFixed(3)}`;
 }
 
 function findPlayer(standings) {
@@ -372,23 +261,24 @@ function render() {
     return;
   }
   card.classList.remove("hidden");
-  ensureBaselines(latestStandings);
 
   const overall = entry.position || 0;
-  const classPos = classPosition(entry, latestStandings) || overall;
-  document.getElementById("posClass").textContent = classPos || "—";
-  document.getElementById("posOverall").textContent = overall || "—";
+  // raceState do jogo: 4 desclassificado, 5 retirado, 6 DNF. Quem abandonou
+  // nao tem mais posicao.
+  const dnf = entry.raceState === 4 || entry.raceState === 5 || entry.raceState === 6;
+  const classPos = dnf ? "DNF" : classPosition(entry, latestStandings) || overall;
+  document.getElementById("posClass").textContent = dnf ? "—" : classPos || "—";
+  document.getElementById("posOverall").textContent = dnf ? "DNF" : overall || "—";
 
-  const cls = rltClassName(entry);
+  // nome e cor da classe pelas mesmas regras da tabela
   const classBar = document.getElementById("classBar");
-  document.getElementById("className").textContent = cls || "—";
-  const info = rltLookup(entry);
-  const color = (info && info.color) || "#0e42a5";
-  classBar.style.background = color;
+  document.getElementById("className").textContent = classLabel(entry) || "—";
+  classBar.style.background = classColor(entry);
 
   const team = rltTeamName(entry);
   document.getElementById("driverName").textContent = rltDisplayName(entry) || entry.name || "—";
-  document.getElementById("teamName").textContent = team || "—";
+  document.getElementById("teamName").textContent = rltTeamFullName(entry) || "—";
+  paintPositionColumn(entry);
   document.getElementById("raceNum").textContent = rltRaceNumber(entry);
 
   setBgLogo(document.getElementById("bgLogo"), team, entry.carName);
@@ -413,8 +303,20 @@ function render() {
       <div class="stat"><div class="v">${pts}</div><div class="l">Pontos</div></div>
       <div class="stat"><div class="v">${gap}</div><div class="l">Gap líder</div></div>
     `;
+  } else if (isTimedSession()) {
+    // treino e classificacao: velocidade, melhor volta e diferenca pro lider da classe
+    const speed = typeof entry.speedKmh === "number" ? `${Math.round(entry.speedKmh)} km/h` : "—";
+    const fl = entry.fastestLapMs ? formatTime(entry.fastestLapMs) : "—";
+    stats.innerHTML = `
+      <div class="stat"><div class="v">${speed}</div><div class="l">Velocidade</div></div>
+      <div class="stat"><div class="v">${fl}</div><div class="l">Melhor volta</div></div>
+      <div class="stat"><div class="v">${classLeaderGap(entry, latestStandings)}</div><div class="l">Líder da classe</div></div>
+    `;
   } else {
-    const start = startOverall && startOverall.has(entry.name) ? startOverall.get(entry.name) : "—";
+    // "Atual" e a posicao na classe, entao a largada tambem e na classe
+    // (a posicao de largada geral vem do servidor, server/raceState.js)
+    const startInClass = grouper.startPosition(entry, latestStandings);
+    const start = startInClass != null ? startInClass : "—";
     const fl = entry.fastestLapMs ? formatTime(entry.fastestLapMs) : "—";
     stats.innerHTML = `
       <div class="stat"><div class="v">${classPos || "—"}</div><div class="l">Atual</div></div>
@@ -433,19 +335,19 @@ function connect() {
         const payload = msg.data;
         const list = Array.isArray(payload) ? payload : payload && payload.standings;
         latestStandings = Array.isArray(list) ? list : [];
+        if (rltMatcher) rltMatcher.prime(latestStandings.map((e) => e.name));
         const session = Array.isArray(payload) ? null : payload && payload.session;
-        if (session && session.state !== undefined) {
-          // reset baseline on session change lightly handled by field moving lock
+        if (session && session.state != null) {
+          const st = Number(session.state);
+          latestSessionState = Number.isNaN(st) ? null : st;
         }
         render();
       } else if (msg.type === "rltConfig") {
         rltConfig = msg.data || null;
-        rltLookupCache.clear();
+        rebuildRltMatcher();
         render();
       } else if (msg.type === "assetsConfig") {
-        const d = msg.data || {};
-        logoBaseUrl = d.baseUrl || "";
-        logoCacheBust = d.cacheBust || "";
+        logoLoader.setConfig(msg.data || {});
         render();
       } else if (msg.type === "overlayCommand") {
         const name = msg.name;

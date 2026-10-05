@@ -21,6 +21,26 @@ function setOpacity(target, value) {
   send("overlay.setOpacity", { target, value: v / 100 });
 }
 
+// Intensidade do degrade com a cor da equipe nas linhas da tabela.
+function setTeamTint(value) {
+  const v = Math.max(0, Math.min(100, Number(value) || 0));
+  const el = document.getElementById("teamTintVal");
+  if (el) el.textContent = v + "%";
+  try {
+    localStorage.setItem("teamTintPanel", String(v));
+  } catch (_) {}
+  send("overlay.setTeamTint", { value: v / 100 });
+}
+
+// o slider abre na ultima intensidade escolhida
+try {
+  const saved = localStorage.getItem("teamTintPanel");
+  if (saved != null) {
+    document.getElementById("teamTint").value = saved;
+    document.getElementById("teamTintVal").textContent = saved + "%";
+  }
+} catch (_) {}
+
 function log(msg) {
   const el = document.getElementById("rltLog");
   if (!el) return;
@@ -186,8 +206,8 @@ function showAssetsBaseStatus(body) {
   if (!el) return;
   if (input) input.value = body.baseUrl || "";
   el.textContent = body.baseUrl
-    ? `GitHub/raw: ${body.baseUrl} (v=${body.cacheBust || "—"})`
-    : "Usando assets local do projeto";
+    ? `Online primeiro: ${body.baseUrl} (v=${body.cacheBust || "—"}). Reserva: pasta local.`
+    : "Usando só a pasta local do projeto";
 }
 
 async function loadAssetsBase() {

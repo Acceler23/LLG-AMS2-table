@@ -25,6 +25,7 @@
   <button onclick="send('overlay.prevColumn')">Coluna ← ,</button>
   <button onclick="send('overlay.nextColumn')">Coluna → .</button>
   <button onclick="send('overlay.toggleHighlight')">Destaque (p)</button>
+  <button onclick="send('race.reset')" title="Recalcula posições de largada e zera paradas/stint. Use no grid se a overlay foi aberta no meio da sessão.">Zerar largada e paradas</button>
 
   <div class="box">
     <div class="row">
@@ -36,6 +37,11 @@
       <label class="muted" style="min-width:140px">Opacidade itens</label>
       <input id="opRows" type="range" min="0" max="100" value="100" oninput="setOpacity('rows', this.value)" />
       <span id="opRowsVal" class="muted" style="min-width:36px">100%</span>
+    </div>
+    <div class="row">
+      <label class="muted" style="min-width:140px" title="Degradê com a cor principal da equipe (RLT) em cada linha da tabela. 0% desliga.">Cor da equipe</label>
+      <input id="teamTint" type="range" min="0" max="100" value="50" oninput="setTeamTint(this.value)" />
+      <span id="teamTintVal" class="muted" style="min-width:36px">50%</span>
     </div>
   </div>
 
@@ -56,7 +62,7 @@
     <div class="muted" id="rltStatus"></div>
     <div id="rltLog"></div>
     <h3 style="margin-top:16px">Logos (GitHub)</h3>
-    <div class="muted">Repo com pastas teams/ e cars/. Aceita link do GitHub ou raw. Vazio = assets local.</div>
+    <div class="muted">Repo com pastas teams/ e cars/. Aceita link do GitHub ou raw. A overlay busca primeiro aqui e usa a pasta local como reserva. Vazio = só pasta local.</div>
     <div class="row">
       <input id="assetsBaseUrl" type="text" placeholder="https://github.com/user/repo ou .../tree/main/assets" />
       <button onclick="saveAssetsBase()">Salvar</button>

@@ -1,4 +1,3 @@
-//  API key: bdc181b61f277ee632fce5c1af6d2b46ef836def631b102545384d5e9d1ececc
 //  Public Cloud: 9GSB
 
 const CLASS_NAME_OVERRIDES = {

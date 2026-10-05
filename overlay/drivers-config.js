@@ -392,3 +392,24 @@ const TEAM_LOGO_OVERRIDES = {
   "Apex": "apex_racing.png",
   "Heat": "heat_racing.png",
 };
+
+// Pontos por posicao de chegada, usados na coluna "Pts proj." da tela de
+// pontuacao (primeiro valor = P1). Quem abandona nao projeta pontos.
+const RACE_POINTS_DEFAULT = [45, 38, 32, 27, 23, 20, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5];
+
+// Tabela propria para uma temporada: use o nome exato da season no RLT
+// (ou o id dela) como chave. Temporadas fora desta lista usam RACE_POINTS_DEFAULT.
+const RACE_POINTS_BY_SEASON = {
+  // "Porsche Cup - Temporada 4": [25, 18, 15, 12, 10, 8, 6, 4, 2, 1],
+};
+
+// Classes do jogo em que todos os carros tem a mesma carClass mas a liga
+// separa por modelo (ex: Carrera Cup 3.8 e 4.0). Numa sessao so com uma
+// dessas classes, cada modelo de carro vira uma classe na tabela e no driver
+// card. Nao se aplica quando ha temporada do RLT com classes definidas.
+const SPLIT_BY_CAR_CLASSES = [
+  "Carrera Cup",
+  "LancerCup",
+  "LES_2025",
+  "TSICup",
+];

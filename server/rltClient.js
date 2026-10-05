@@ -1,10 +1,12 @@
 const BASE = "https://www.racingleaguetools.com";
 const REFRESH_MS = 5 * 60 * 1000;
 
-// Cole a API key aqui (ou use RLT_API_KEY no ambiente)
-const RLT_API_KEY = process.env.RLT_API_KEY || "bdc181b61f277ee632fce5c1af6d2b46ef836def631b102545384d5e9d1ececc";
+const { normalizeName } = require("../overlay/shared/names");
+const { normalizeColor } = require("../overlay/shared/colors");
 
-let apiKey = RLT_API_KEY && RLT_API_KEY !== "COLE_SUA_API_KEY_AQUI" ? RLT_API_KEY : "";
+// A chave vem da variavel RLT_API_KEY (arquivo .env na raiz do projeto) ou
+// do painel de controle. Nunca escreva a chave neste arquivo: ele vai pro git.
+let apiKey = String(process.env.RLT_API_KEY || "").trim();
 let selectedSeasonId = null;
 let refreshTimer = null;
 let onRefreshCb = null;
@@ -71,20 +73,6 @@ function unwrap(body) {
   if (!body) return null;
   if (body.data !== undefined) return body.data;
   return body;
-}
-
-function normalizeName(name) {
-  return String(name || "")
-    .replace(/\[[^\]]*\]/g, "")
-    .replace(/[\u200B-\u200D\uFEFF\u00AD]/g, "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[|\/\\]+/g, " ")
-    .replace(/\./g, " ")
-    .replace(/[^a-zA-Z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
 }
 
 async function fetchLeague() {
@@ -312,13 +300,7 @@ function buildDrivers(standingsData, classes) {
       null;
 
     let color = (cls && cls.color) || (info && info.color) || null;
-    if (color) {
-      let hx = String(color).trim();
-      if (hx.startsWith("#")) hx = hx.slice(1);
-      if (/^[0-9a-fA-F]{8}$/.test(hx)) color = `#${hx.slice(2, 8)}`;
-      else if (/^[0-9a-fA-F]{6}$/.test(hx)) color = `#${hx}`;
-      else if (/^[0-9a-fA-F]{3}$/.test(hx)) color = `#${hx}`;
-    }
+    color = normalizeColor(color);
 
     list.push({
       uniqueName: (cls && cls.uniqueName) || (info && info.uniqueName) || "—",
@@ -331,11 +313,22 @@ function buildDrivers(standingsData, classes) {
       inGameName: inGamePrimary ? String(inGamePrimary) : null,
       description: description || null,
       teamName: d.teamName || di.teamName || null,
+      ...teamFields(d),
       raceNumber: di.raceNumber || di.RaceNumber || d.raceNumber || null,
       aliases: Array.from(aliases),
     });
   });
   return list;
+}
+
+// Dados da equipe que o RLT manda em teamInfo: nome completo e cores.
+function teamFields(d) {
+  const ti = (d && (d.teamInfo || d.TeamInfo)) || {};
+  return {
+    teamFullName: ti.fullName || ti.FullName || null,
+    teamPrimaryColor: normalizeColor(ti.primaryColor || ti.PrimaryColor || null),
+    teamSecondaryColor: normalizeColor(ti.secondaryColor || ti.SecondaryColor || null),
+  };
 }
 
 function parsePoints(p) {
@@ -377,13 +370,7 @@ function buildStandingsRows(standingsData, classes) {
         ? `${firstName} ${lastName}`.trim()
         : di.displayName || di.DisplayName || di.realName || di.RealName || d.driverName || d.DriverName || "—";
     let color = (cls && cls.color) || (classInfo && classInfo.color) || null;
-    if (color) {
-      let hx = String(color).trim();
-      if (hx.startsWith("#")) hx = hx.slice(1);
-      if (/^[0-9a-fA-F]{8}$/.test(hx)) color = `#${hx.slice(2, 8)}`;
-      else if (/^[0-9a-fA-F]{6}$/.test(hx)) color = `#${hx}`;
-      else if (/^[0-9a-fA-F]{3}$/.test(hx)) color = `#${hx}`;
-    }
+    color = normalizeColor(color);
     const description = di.description || d.description || null;
     const aliases = new Set();
     addNameParts(aliases, description);
@@ -434,6 +421,7 @@ function buildStandingsRows(standingsData, classes) {
       positionChange: d.positionChange != null ? d.positionChange : null,
       classPositionChange: classRow && classRow.positionChange != null ? classRow.positionChange : null,
       teamName: d.teamName || null,
+      ...teamFields(d),
       raceNumber: di.raceNumber || di.RaceNumber || d.raceNumber || null,
       classUniqueName: (cls && cls.uniqueName) || (classInfo && classInfo.uniqueName) || "—",
       className: (cls && cls.name) || (classInfo && classInfo.name) || "—",

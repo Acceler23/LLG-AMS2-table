@@ -1,0 +1,10 @@
+# dependencias: instaladas com "npm install" (o start.bat faz isso sozinho)
+node_modules/
+
+# configuracao local com segredos (chave do RLT, senha do OBS)
+.env
+
+# lixo de editor/sistema
+*.log
+Thumbs.db
+.DS_Store

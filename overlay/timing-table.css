@@ -9,6 +9,7 @@ html, body {
 #timing-table {
   --table-opacity: 1;
   --row-opacity: 1;
+  --team-tint: 0.5; /* intensidade do degrade da equipe, 0 a 1 (slider do painel) */
   position: absolute;
   width: 500px;
   max-height: 1080px;
@@ -98,8 +99,16 @@ html, body {
   background: rgba(0,0,0,0.35);
   color: #fff;
   font-weight: 700;
-  font-size: 14px;
-  padding: 6px 16px;
+  font-size: 20px;
+  /* mesma altura de uma linha de piloto (43 + 3 de borda = 46 px): assim a
+     tabela cheia tem a mesma altura em Geral e em Multiclasse. Se mudar,
+     ajuste CLASS_HDR_H em timing-table.js. */
+  box-sizing: border-box;
+  height: 46px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   letter-spacing: 0.5px;
   border-left: 4px solid transparent;
   text-align: center;
@@ -111,8 +120,8 @@ html, body {
 }
 
 .row-spacer {
-  min-height: 44px;
-  height: 44px;
+  min-height: 43px;
+  height: 43px;
   visibility: hidden;
   pointer-events: none;
   margin-left: 5px;
@@ -122,7 +131,9 @@ html, body {
   display: grid;
   grid-template-columns: 46px 1fr 100px;
   align-items: stretch;
-  min-height: 44px;
+  /* 43 + 3 de borda + 3 de espaco = 49 px por linha: cabem 20 em 1080 px.
+     Se mudar, ajuste ROW_H em timing-table.js. */
+  min-height: 43px;
   font-size: 20px;
   background-color: rgba(14, 66, 165, var(--row-opacity));
   border-top: 3px solid #3a5a8c;
@@ -133,6 +144,22 @@ html, body {
 
 #timing-table.wide-right .row {
   grid-template-columns: 46px 1fr 150px;
+}
+
+/* Degrade suave com a cor principal da equipe, a partir da caixa da posicao.
+   Nao se aplica a linha quadriculada (chegada) nem a de bandeira amarela. */
+.row.has-team:not(.finished):not(.yellow-flag) {
+  background-image: linear-gradient(
+    90deg,
+    rgba(var(--team-rgb), calc(var(--team-tint) * 0.7)) 46px,
+    rgba(var(--team-rgb), calc(var(--team-tint) * 0.3)) 40%,
+    rgba(var(--team-rgb), 0) 85%
+  );
+}
+
+/* equipes de cor clara: o nome continua legivel sobre o degrade */
+.row.has-team .name-text {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
 }
 
 .row.player {
@@ -317,9 +344,10 @@ html, body {
   letter-spacing: -0.3px;
 }
 
+/* Melhor volta: so negrito. A cor roxa saiu do texto porque o relogio e os
+   setores ja indicam a volta mais rapida. */
 .row.fastest .right-value,
 .right-value.fastest-gap {
-  color: #d24bff;
   font-weight: 700;
 }
 
@@ -342,4 +370,30 @@ html, body {
 }
 @keyframes flashDown {
   from { background-color: rgba(255, 90, 90, 0.55); }
+}
+
+
+/* Relogio da volta mais rapida, ao lado da tabela (so em corrida).
+   Os elementos sao criados por updateFastLapClock() em timing-table.js. */
+.fast-lap-clock {
+  position: absolute;
+  height: 30px;
+  width: auto;
+  /* o icone e branco: o fundo roxo (cor de volta mais rapida) garante que
+     ele apareca sobre qualquer imagem, inclusive fundo claro */
+  box-sizing: border-box;
+  padding: 4px 5px;
+  background-color: #9b30d0;
+  border-radius: 5px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.fast-lap-clock.visible {
+  visibility: visible;
+}
+
+/* ?clock=left: abre espaco a esquerda da tabela para o relogio */
+#timing-table.clock-left {
+  left: 32px;
 }
