@@ -6,6 +6,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const secret = require("./secret");
 
 const dir = process.env.LLG_DATA_DIR || path.join(__dirname, "..");
 const file = path.join(dir, "settings.json");
@@ -32,4 +33,18 @@ function set(key, value) {
   }
 }
 
-module.exports = { get, set, file };
+// Valores secretos (chave do RLT): gravados criptografados. Um valor antigo,
+// salvo em texto puro, e aceito e regravado criptografado na primeira leitura.
+function getSecret(key) {
+  const value = data[key];
+  if (!value) return "";
+  if (secret.isEncrypted(value)) return secret.decrypt(value);
+  set(key, secret.encrypt(value));
+  return String(value);
+}
+
+function setSecret(key, value) {
+  set(key, value ? secret.encrypt(value) : null);
+}
+
+module.exports = { get, set, getSecret, setSecret, file };

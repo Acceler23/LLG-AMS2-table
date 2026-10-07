@@ -19,9 +19,14 @@ const rlt = require("./rltClient");
 const settings = require("./settings");
 const lmuFocus = require("./lmuFocus");
 const { startAccClient } = require("./accClient");
+const { startAcClient } = require("./acClient");
+const { installAcApp } = require("./acInstaller");
+const secret = require("./secret");
 
 // Chave do RLT: a do .env tem prioridade; senao, a ultima salva pelo painel.
-if (!rlt.hasKey() && settings.get("rltApiKey")) rlt.setApiKey(settings.get("rltApiKey"));
+// (ler sempre: uma chave antiga, salva em texto puro, e regravada criptografada)
+const savedRltKey = settings.getSecret("rltApiKey");
+if (!rlt.hasKey() && savedRltKey) rlt.setApiKey(savedRltKey);
 
 const HTTP_PORT = process.env.HTTP_PORT || 8080;
 const BRIDGE_PORT = process.env.BRIDGE_PORT || 5607;
@@ -203,6 +208,20 @@ app.post("/api/overlay/alternate", (req, res) => {
   res.json({ ok: true, enabled: alternate.enabled, seconds: alternate.seconds });
 });
 
+// Assetto Corsa (o primeiro): instala o app Python da overlay na pasta do jogo.
+// So acontece quando alguem clica no botao do painel.
+app.post("/api/ac/install", async (req, res) => {
+  const r = await installAcApp();
+  if (!r.installed) {
+    const error =
+      r.reason === "sem-jogo"
+        ? "Assetto Corsa nao encontrado nas bibliotecas da Steam. Veja a instalacao manual no README."
+        : "Nao foi possivel instalar o app. Veja a instalacao manual no README.";
+    return res.status(r.reason === "sem-jogo" ? 404 : 500).json({ ok: false, error });
+  }
+  res.json({ ok: true, gameDir: r.gameDir, copied: r.copied, enabled: r.enabled, active: r.active });
+});
+
 app.post("/command", (req, res) => {
   const name = req.body && req.body.name;
   if (!name) return res.status(400).json({ ok: false });
@@ -305,16 +324,27 @@ app.get("/api/rlt/drivers", (req, res) => {
 
 app.post("/api/rlt/key", async (req, res) => {
   try {
-    const key = req.body && req.body.apiKey;
+    // Aceita a chave criptografada (a que o organizador distribui, "llg1:...")
+    // ou a chave pura do RLT.
+    const typed = String((req.body && req.body.apiKey) || "").trim();
+    const key = secret.reveal(typed);
+    if (typed && !key) return res.status(400).json({ ok: false, error: "Chave invalida: confira se copiou a chave inteira." });
+    const previous = rlt.getApiKey();
     rlt.setApiKey(key);
-    settings.set("seasonId", null);
     if (!rlt.hasKey()) {
+      settings.set("seasonId", null);
       settings.set("rltApiKey", null);
       return res.json({ ok: true, hasKey: false });
     }
-    await rlt.fetchLeague();
-    await rlt.fetchSeasons();
-    settings.set("rltApiKey", rlt.getApiKey()); // so guarda a chave que funcionou
+    try {
+      await rlt.fetchLeague();
+      await rlt.fetchSeasons();
+    } catch (err) {
+      rlt.setApiKey(previous); // a chave nova nao funcionou: continua com a de antes
+      throw err;
+    }
+    settings.set("seasonId", null);
+    settings.setSecret("rltApiKey", rlt.getApiKey()); // so guarda a chave que funcionou (criptografada)
     res.json({
       ok: true,
       hasKey: true,
@@ -395,7 +425,7 @@ app.post("/api/rlt/clear", (req, res) => {
 // (pela ponte TCP) e o cliente do ACC (direto, pela API de transmissao do jogo).
 // O jogo que esta numa sessao (manda carros) e o "ativo". As outras fontes,
 // que so mandam listas vazias, sao ignoradas para as overlays nao piscarem.
-const GAME_NAMES = { ams2: "Automobilista 2", lmu: "Le Mans Ultimate", acc: "Assetto Corsa Competizione" };
+const GAME_NAMES = { ams2: "Automobilista 2", lmu: "Le Mans Ultimate", acc: "Assetto Corsa Competizione", ac: "Assetto Corsa" };
 let activeGame = null;
 let activeGameSeenAt = 0;
 let activeGameCarsAt = 0; // ultima vez que o jogo ativo mandou carros
@@ -444,10 +474,24 @@ const accClient = accDisabled
       }
     });
 
+// Assetto Corsa (o primeiro): os carros chegam do app Python que roda dentro
+// do jogo (ac-app/LLGOverlay), por um named pipe. AC_API=off desliga.
+const acDisabled = /^(off|0|false)$/i.test(process.env.AC_API || "");
+const acClient = acDisabled
+  ? { stop() {}, setStatus() {} }
+  : startAcClient((payload) => {
+      try {
+        handleGamePayload(payload);
+      } catch (err) {
+        console.error("Erro ao tratar dados do Assetto Corsa:", err.message);
+      }
+    });
+
 // Ao fechar (Ctrl+C, janela do console fechada, aplicativo encerrando), cancela
 // o registro no ACC. O aplicativo chama shutdown() antes de sair.
 function shutdown() {
   accClient.stop();
+  acClient.stop();
 }
 if (require.main === module) {
   ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"].forEach((signal) => {
@@ -464,6 +508,11 @@ startTcpBridge(BRIDGE_PORT, (buffer) => {
     // aviso do listener.ps1: o ACC entrou ou saiu de uma sessao
     if (payload && payload.accStatus) {
       accClient.setGameLive(!!payload.accStatus.live);
+      return;
+    }
+    // idem para o Assetto Corsa: sessao atual e tempo restante
+    if (payload && payload.acStatus) {
+      acClient.setStatus(payload.acStatus);
       return;
     }
     handleGamePayload(payload);

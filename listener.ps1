@@ -266,11 +266,66 @@ function Test-AccLive {
     }
 }
 
+# ---- Assetto Corsa (o primeiro) ----
+# Usa os MESMOS nomes de Shared Memory do ACC, entao o que diz qual dos dois
+# esta aberto e o processo (acs.exe). Os carros chegam ao servidor pelo app
+# Python do jogo (ac-app/LLGOverlay); daqui vao a sessao atual, o tempo
+# restante e o numero de voltas, que o app nao tem como ler.
+$script:ac1Running = $false
+$script:ac1ProcAt = [DateTime]::MinValue
+$script:ac1SentAt = [DateTime]::MinValue
+
+function Test-Ac1Running {
+    $now = [DateTime]::UtcNow
+    if (($now - $script:ac1ProcAt).TotalSeconds -ge 3) {
+        $script:ac1ProcAt = $now
+        $script:ac1Running = [bool](Get-Process -Name acs -ErrorAction SilentlyContinue)
+    }
+    return $script:ac1Running
+}
+
+function Send-Json($stream, $json) {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+    $len = [BitConverter]::GetBytes([int32]$bytes.Length)
+    if ([BitConverter]::IsLittleEndian) { [Array]::Reverse($len) }
+    $stream.Write($len, 0, 4)
+    $stream.Write($bytes, 0, $bytes.Length)
+}
+
+function Send-Ac1Status($stream) {
+    $now = [DateTime]::UtcNow
+    if (($now - $script:ac1SentAt).TotalMilliseconds -lt 200) { return }
+    $script:ac1SentAt = $now
+    try {
+        $m = [System.IO.MemoryMappedFiles.MemoryMappedFile]::OpenExisting('Local\acpmf_graphics')
+        $v = $m.CreateViewAccessor(0, 176, [System.IO.MemoryMappedFiles.MemoryMappedFileAccess]::Read)
+        $status = $v.ReadInt32(4)
+        $session = $v.ReadInt32(8)
+        $left = [double]$v.ReadSingle(152)
+        $laps = $v.ReadInt32(172)
+        $v.Dispose(); $m.Dispose()
+        $timed = 0
+        try {
+            $m = [System.IO.MemoryMappedFiles.MemoryMappedFile]::OpenExisting('Local\acpmf_static')
+            $v = $m.CreateViewAccessor(0, 604, [System.IO.MemoryMappedFiles.MemoryMappedFileAccess]::Read)
+            $timed = $v.ReadInt32(596)
+            $v.Dispose(); $m.Dispose()
+        } catch { }
+        if ([double]::IsNaN($left) -or [double]::IsInfinity($left) -or $left -lt 0 -or $left -gt 4e9) { $left = 0.0 }
+        $json = '{"acStatus":{"status":' + $status + ',"session":' + $session + ',"timeLeftMs":' + [long][math]::Round($left) + ',"laps":' + $laps + ',"timed":' + $(if ($timed -ne 0) { 'true' } else { 'false' }) + '}}'
+    } catch {
+        return   # jogo fechando
+    }
+    Send-Json $stream $json
+}
+
 function Send-AccStatus($stream) {
+    # o Assetto Corsa 1 esta aberto, nao o ACC
+    if (Test-Ac1Running) { Send-Ac1Status $stream }
     $now = [DateTime]::UtcNow
     if (($now - $script:accCheckedAt).TotalMilliseconds -lt 400) { return }
     $script:accCheckedAt = $now
-    $live = Test-AccLive
+    $live = $(if ($script:ac1Running) { $false } else { Test-AccLive })
     # manda quando muda, e repete a cada 3 s para o servidor nao perder o estado
     if ($live -eq $script:accLive -and ($now - $script:accSentAt).TotalSeconds -lt 3) { return }
     $script:accLive = $live

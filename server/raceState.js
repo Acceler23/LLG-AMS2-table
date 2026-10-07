@@ -115,6 +115,8 @@ function createRaceState(clock) {
       st.stintLaps = 0;
       return;
     }
+    // quem ja recebeu a bandeirada e levado para o box pelo jogo: nao e parada
+    if (entry.raceState === 3) return;
     if (inPit && !st.wasInPit) {
       st.stops += 1;
       st.wasInPit = true;

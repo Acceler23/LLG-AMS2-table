@@ -3,7 +3,7 @@ const DEMO = params.get("demo") === "1";
 
 const WS_URL = `ws://${location.hostname}:${location.port || 8080}/ws`;
 
-const RIGHT_COLUMN_MODES = ["Intervalo", "Gap líder", "Última volta", "Melhor volta", "Posições", "Paradas", "Stint", "VMax"];
+const RIGHT_COLUMN_MODES = ["Intervalo", "Gap líder", "Última volta", "Melhor volta", "Posições", "Paradas", "Stint", "VMax", "Pneus"];
 let rightColumnIndex = 0;
 
 const PAGE_MODES_ALL = ["Geral", "Multiclasse", "Minha classe"];
@@ -19,8 +19,19 @@ const RLT_MATCH_MIN = 0.98;
 
 // composto -> letra e classe de cor do "pneu"
 function tyreCompound(name) {
-  const n = String(name || "").toLowerCase();
+  const n = String(name || "").trim().toLowerCase();
   if (!n) return null;
+  // Assetto Corsa: o jogo manda a sigla do composto (S, M, H, SH, SM...).
+  // As cores seguem o "Pirelli rainbow" de 2018 (classes rb-*, no CSS).
+  if (n.length <= 3) {
+    if (n === "wet") return { letter: "W", cls: "wet" }; // nome inteiro do LMU, com 3 letras
+    const letter = n.toUpperCase();
+    const rainbow = { sh: "superhard", h: "hard", m: "medium", s: "soft", ss: "supersoft", us: "ultrasoft", hs: "hypersoft" };
+    if (rainbow[n]) return { letter, cls: `rb-${rainbow[n]}` };
+    if (n === "w") return { letter, cls: "wet" };
+    if (n === "i") return { letter, cls: "inter" };
+    return { letter, cls: "other" };
+  }
   if (n.includes("wet") || n.includes("rain") || n.includes("chuva")) return { letter: "W", cls: "wet" };
   if (n.includes("inter")) return { letter: "I", cls: "inter" };
   if (n.includes("soft") || n.includes("macio")) return { letter: "S", cls: "soft" };
@@ -30,13 +41,44 @@ function tyreCompound(name) {
 }
 
 // Pneu: letra do composto (dianteiro e traseiro, se forem diferentes).
-function renderTyreCell(cell, entry) {
+function tyreBadges(entry) {
+  // LMU: composto de cada roda (diant. esq, diant. dir, tras. esq, tras. dir).
+  // Todos iguais: um circulo com a letra. Algum diferente: uma grade 2 x 2 so
+  // com a cor de cada composto, na posicao em que as rodas estao no carro.
+  const wheels = Array.isArray(entry.tyres) && entry.tyres.length === 4 ? entry.tyres.map(tyreCompound) : null;
+  if (wheels && wheels.every(Boolean)) {
+    if (wheels.every((w) => w.cls === wheels[0].cls && w.letter === wheels[0].letter)) {
+      return { html: `<span class="tyre-badge ${wheels[0].cls}">${wheels[0].letter}</span>`, pair: false };
+    }
+    const cells = wheels.map((w) => `<span class="tyre-cell ${w.cls}"></span>`).join("");
+    return { html: `<span class="tyre-grid">${cells}</span>`, pair: false };
+  }
   const front = tyreCompound(entry.tyreFront);
   const rear = tyreCompound(entry.tyreRear);
   let html = "";
   if (front) html += `<span class="tyre-badge ${front.cls}">${front.letter}</span>`;
   const pair = !!(front && rear && rear.letter !== front.letter);
   if (rear && (!front || pair)) html += `<span class="tyre-badge ${rear.cls}">${rear.letter}</span>`;
+  return { html, pair };
+}
+
+// A pagina "Pneus" da coluna da direita so entra no rodizio quando o jogo
+// informa o composto. No LMU os pneus ja ficam ao lado da tabela.
+function rightModeAvailable(mode) {
+  if (mode !== "Pneus") return true;
+  return latestGame !== "lmu" && latestStandings.some((e) => e && (e.tyreFront || e.tyreRear));
+}
+
+function stepRightColumn(dir) {
+  const n = RIGHT_COLUMN_MODES.length;
+  for (let i = 0; i < n; i++) {
+    rightColumnIndex = (rightColumnIndex + dir + n) % n;
+    if (rightModeAvailable(RIGHT_COLUMN_MODES[rightColumnIndex])) return;
+  }
+}
+
+function renderTyreCell(cell, entry) {
+  const { html, pair } = tyreBadges(entry);
   cell.classList.toggle("pair", pair); // dois compostos: circulos menores para caber
   if (cell.dataset.html !== html) {
     cell.innerHTML = html;
@@ -587,13 +629,13 @@ function applyOverlayCommand(name, payload = {}) {
     if (showingStandings()) {
       standingsColumnIndex = (standingsColumnIndex - 1 + STANDINGS_COLUMN_MODES.length) % STANDINGS_COLUMN_MODES.length;
     } else {
-      rightColumnIndex = (rightColumnIndex - 1 + RIGHT_COLUMN_MODES.length) % RIGHT_COLUMN_MODES.length;
+      stepRightColumn(-1);
     }
   } else if (name === "overlay.nextColumn") {
     if (showingStandings()) {
       standingsColumnIndex = (standingsColumnIndex + 1) % STANDINGS_COLUMN_MODES.length;
     } else {
-      rightColumnIndex = (rightColumnIndex + 1) % RIGHT_COLUMN_MODES.length;
+      stepRightColumn(1);
     }
   } else if (name === "overlay.prevPage") {
     const modes = activePageModes(latestStandings);
@@ -869,9 +911,17 @@ function raceGap(entry, ref) {
   return { text: `+${(behind / entry.speedMs).toFixed(1)}`, cls: "" };
 }
 
+// AMS2: na primeira volta a distancia percorrida que o jogo informa nao serve
+// (ela volta para tras quando o carro cruza a linha na largada), entao o
+// intervalo so aparece a partir da segunda volta. Nos outros jogos a distancia
+// vale desde a largada e o intervalo aparece logo.
+function firstLapWithoutGap(entry) {
+  return latestGame === "ams2" && (!entry.lapsCompleted || entry.currentLap <= 1);
+}
+
 function formatLeaderGap(entry, bestFastestMs) {
   if (!isRaceSession()) return formatQualGap(entry, bestFastestMs);
-  if (!entry.lapsCompleted && entry.currentLap <= 1) return { text: "-", cls: "" };
+  if (firstLapWithoutGap(entry)) return { text: "-", cls: "" };
   return raceGap(entry, entry._leader);
 }
 
@@ -882,6 +932,7 @@ function rightColumnValue(entry, change, bestFastestMs, aheadFastestMs) {
 
   const mode = RIGHT_COLUMN_MODES[rightColumnIndex];
   const pit = pitInfo(entry);
+  if (mode === "Pneus") return { text: "", html: tyreBadges(entry).html, cls: "tyres", pitPhase: pit.phase };
   const raceGapMode = isRaceSession() && (mode === "Intervalo" || mode === "Gap líder");
 
   if (raceGapMode && (pit.phase === "in" || pit.phase === "out")) {
@@ -1094,8 +1145,7 @@ function formatGap(entry, change, aheadFastestMs) {
     return formatQualGap(entry, aheadFastestMs);
   }
 
-  const firstLap = !entry.lapsCompleted || entry.currentLap <= 1;
-  if (firstLap) return formatPosChange(change);
+  if (firstLapWithoutGap(entry)) return formatPosChange(change);
 
   return raceGap(entry, entry._ahead);
 }
@@ -1709,6 +1759,8 @@ function renderTable(standings) {
     renderStandings(standings);
     return;
   }
+  // trocou de jogo e a pagina de pneus deixou de existir: volta para a primeira
+  if (!rightModeAvailable(RIGHT_COLUMN_MODES[rightColumnIndex])) rightColumnIndex = 0;
   document.getElementById("rightColumnLabel").textContent = RIGHT_COLUMN_MODES[rightColumnIndex];
   document.getElementById("timing-table").classList.remove("wide-right");
   document.getElementById("pageLabel").textContent = currentPageLabel(standings);
@@ -1937,7 +1989,15 @@ function renderTable(standings) {
     const aheadFast = item.aheadFastestMs != null ? item.aheadFastestMs : prevFastestMs;
     const rv = rightColumnValue(entry, change, rowBestFastest, aheadFast);
     const rvEl = el.querySelector(".right-value");
-    rvEl.textContent = rv.text;
+    if (rv.html != null) {
+      if (rvEl.dataset.html !== rv.html) {
+        rvEl.innerHTML = rv.html;
+        rvEl.dataset.html = rv.html;
+      }
+    } else {
+      rvEl.textContent = rv.text;
+      delete rvEl.dataset.html;
+    }
     rvEl.className = "col right-value" + (rv.cls ? ` ${rv.cls}` : "");
 
     const badge = el.querySelector(".pit-badge");

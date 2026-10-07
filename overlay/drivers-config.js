@@ -200,6 +200,7 @@ const CLASS_COLORS = {
   "Hypercars": "#eaca62", // AMS2: hipercarros de rua
   "Hypercar": "#aa0000", // LMU: classe Hypercar (LMH/LMDh), ver LMU_CLASS_NAMES
   "LMP1_05": "#f22a3e",
+  "LMP1": "#f22a3e",
   "LMP2_05": "#e5e25c",
   "LMP2_Gen1": "#3144e6",
   "LMP2": "#3852a4",
@@ -461,4 +462,13 @@ const ACC_CLASS_NAMES = {
   "ST": "Super Trofeo",
   "CHL": "Ferrari Challenge",
   "TCX": "TCX",
+};
+
+// Assetto Corsa (o primeiro): o jogo nao tem classes de corrida. A classe de
+// cada carro vem da etiqueta com "#" do proprio carro (ex: "#GT3" vira "GT3",
+// "#Supercars" vira "Supercars"); sem etiqueta, vale "Street" ou "Race".
+// Use esta lista para trocar esses nomes pelos usados em CLASS_NAME_OVERRIDES
+// e CLASS_COLORS. O que nao estiver aqui aparece como o jogo informa.
+const AC_CLASS_NAMES = {
+  // "Supercars": "Hypercars",
 };

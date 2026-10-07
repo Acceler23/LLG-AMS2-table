@@ -8,6 +8,7 @@
     "start": "node server/index.js",
     "app": "node app/dev.js",
     "build": "node app/build.mjs",
+    "encrypt-key": "node server/secret.js",
     "test": "node --test"
   },
   "dependencies": {

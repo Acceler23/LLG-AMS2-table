@@ -130,6 +130,8 @@ function sortForDisplay(list) {
   });
 }
 
+let latestGame = "ams2"; // jogo que esta mandando os dados
+
 // Coluna da direita: intervalo para o carro da frente na classe (corrida)
 // ou diferenca da melhor volta para o lider da classe (treino/classificacao).
 function gapCell(entry, ahead, leader) {
@@ -138,7 +140,8 @@ function gapCell(entry, ahead, leader) {
     const pit = entry.pit || {};
     if (pit.phase === "in" || pit.phase === "out") return { text: "BOX", cls: "pit" };
     if (!ahead) return { text: "Líder", cls: "" };
-    if (!entry.lapsCompleted && entry.currentLap <= 1) return { text: "", cls: "" };
+    // so no AMS2 a distancia da primeira volta nao serve para o intervalo
+    if (latestGame === "ams2" && !entry.lapsCompleted && entry.currentLap <= 1) return { text: "", cls: "" };
     const g = gapTracker.gap(entry.name, ahead.name, trackLength);
     if (!g) return { text: "–", cls: "" };
     if (g.laps) return { text: `+${g.laps} v`, cls: "" };
@@ -450,7 +453,8 @@ function handleStandings(payload) {
     }
   }
   standings = list.filter((e) => e && e.name);
-  LLGDisplay.applyGameClassNames(standings, !Array.isArray(payload) && payload && payload.game);
+  latestGame = (!Array.isArray(payload) && payload && payload.game) || "ams2";
+  LLGDisplay.applyGameClassNames(standings, latestGame);
   gapTracker.update(standings, (!Array.isArray(payload) && payload && payload.ts) || Date.now());
   if (rltMatcher) rltMatcher.prime(standings.map((e) => e.name));
   render();

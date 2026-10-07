@@ -67,6 +67,26 @@ function log(msg) {
   console.log("[panel]", msg);
 }
 
+// Assetto Corsa 1: instala o app do jogo (so quando o botao e clicado)
+async function installAcApp() {
+  const btn = document.getElementById("acInstallBtn");
+  const status = document.getElementById("acInstallStatus");
+  btn.disabled = true;
+  status.textContent = "Instalando...";
+  try {
+    const r = await api("/api/ac/install", { method: "POST" });
+    let msg = r.copied || r.enabled ? "Instalado em " + r.gameDir + "." : "Já estava instalado e atualizado em " + r.gameDir + ".";
+    if (!r.active) msg += " O app está desligado no jogo: ative \"LLG Overlay\" em Opções > Geral > UI Modules.";
+    else if (r.copied || r.enabled) msg += " Se o jogo estiver numa sessão, entre nela de novo.";
+    status.textContent = msg;
+    log("Assetto Corsa 1: " + msg);
+  } catch (err) {
+    status.textContent = err.message;
+    log("Assetto Corsa 1: " + err.message);
+  }
+  btn.disabled = false;
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
@@ -133,6 +153,10 @@ async function reloadSeasons() {
   }
 }
 
+// Logos de equipe: um menu com as equipes da temporada e um campo para o
+// arquivo da equipe escolhida.
+const teamLogoTyped = {}; // equipe -> ultimo arquivo digitado nesta sessao do painel
+
 function renderTeamLogos(rows) {
   const box = document.getElementById("teamLogos");
   if (!box) return;
@@ -149,23 +173,39 @@ function renderTeamLogos(rows) {
     box.innerHTML = '<span class="muted">Nenhuma equipe na season</span>';
     return;
   }
-  box.innerHTML = teams
-    .map((t) => {
-      const id = "tl_" + btoa(unescape(encodeURIComponent(t))).replace(/[^a-zA-Z0-9]/g, "");
-      return `<div class="row" style="margin:4px 0">
-        <span class="muted" style="min-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t}">${t}</span>
-        <input id="${id}" type="text" placeholder="arquivo.png (vazio=padrão)" data-team="${t.replace(/"/g, "&quot;")}" />
-        <button onclick="saveTeamLogo('${id}')">OK</button>
-      </div>`;
-    })
-    .join("");
+  const previous = (document.getElementById("teamLogoSelect") || {}).value;
+  box.innerHTML = `<div class="row">
+      <select id="teamLogoSelect" onchange="showTeamLogo()"></select>
+    </div>
+    <div class="row">
+      <input id="teamLogoFile" type="text" placeholder="arquivo.png (vazio=padrão)" />
+      <button onclick="saveTeamLogo()">OK</button>
+    </div>`;
+  const sel = document.getElementById("teamLogoSelect");
+  teams.forEach((t) => {
+    const opt = document.createElement("option");
+    opt.value = t;
+    opt.textContent = t;
+    sel.appendChild(opt);
+  });
+  if (previous && teams.includes(previous)) sel.value = previous;
+  showTeamLogo();
 }
 
-function saveTeamLogo(inputId) {
-  const el = document.getElementById(inputId);
-  if (!el) return;
-  const teamName = el.getAttribute("data-team");
-  const file = (el.value || "").trim() || null;
+function showTeamLogo() {
+  const sel = document.getElementById("teamLogoSelect");
+  const input = document.getElementById("teamLogoFile");
+  if (!sel || !input) return;
+  input.value = teamLogoTyped[sel.value] || "";
+}
+
+function saveTeamLogo() {
+  const sel = document.getElementById("teamLogoSelect");
+  const input = document.getElementById("teamLogoFile");
+  if (!sel || !input || !sel.value) return;
+  const teamName = sel.value;
+  const file = (input.value || "").trim() || null;
+  teamLogoTyped[teamName] = file || "";
   send("overlay.setTeamLogo", { teamName, file });
   log(file ? `Logo ${teamName} → ${file}` : `Logo ${teamName} → padrão`);
 }
@@ -254,10 +294,52 @@ async function resetAssetsBase() {
   await saveAssetsBase();
 }
 
+// Primeira vez: sem chave salva, o painel pede a chave antes de tudo.
+function showFirstRun(show) {
+  document.getElementById("firstRun").style.display = show ? "flex" : "none";
+  if (show) document.getElementById("firstRunKey").focus();
+}
+
+function skipFirstRun() {
+  try {
+    sessionStorage.setItem("skipFirstRun", "1"); // nao pergunta de novo ate fechar o painel
+  } catch (_) {}
+  showFirstRun(false);
+}
+
+async function saveFirstRunKey() {
+  const apiKey = document.getElementById("firstRunKey").value.trim();
+  const status = document.getElementById("firstRunStatus");
+  if (!apiKey) {
+    status.textContent = "Cole a chave primeiro.";
+    return;
+  }
+  const btn = document.getElementById("firstRunBtn");
+  btn.disabled = true;
+  status.textContent = "Conferindo a chave...";
+  try {
+    const body = await api("/api/rlt/key", { method: "POST", body: JSON.stringify({ apiKey }) });
+    document.getElementById("firstRunKey").value = "";
+    status.textContent = "";
+    showFirstRun(false);
+    log(`Chave salva. Seasons ativas: ${(body.seasons || []).length}`);
+    renderSeasons(body.seasons || []);
+    document.getElementById("rltStatus").textContent = JSON.stringify(body.status || {}, null, 0);
+  } catch (e) {
+    status.textContent = "Não funcionou: " + e.message;
+  }
+  btn.disabled = false;
+}
+
 async function refreshStatus() {
   try {
     const body = await api("/api/rlt/status");
     document.getElementById("rltStatus").textContent = JSON.stringify(body, null, 0);
+    let skipped = false;
+    try {
+      skipped = sessionStorage.getItem("skipFirstRun") === "1";
+    } catch (_) {}
+    showFirstRun(!body.hasKey && !skipped);
     if (body.hasKey) {
       await reloadSeasons();
       // a temporada aplicada (inclusive a reaplicada ao abrir) aparece selecionada

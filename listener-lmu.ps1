@@ -82,6 +82,9 @@ $T_VEHICLE_MODEL      = 796       # char[30], ex: "BMW M Hybrid V8"
 $T_WHEEL              = 848       # TelemWheelV01[4]: diant. esq, diant. dir, tras. esq, tras. dir
 $WHEEL_SIZE           = 260
 $W_WEAR               = 152       # double, 1.0 = novo
+$W_COMPOUND_TYPE      = 241       # uchar, composto DESTA roda (os nomes acima so dizem um por eixo)
+# tipo de composto por roda -> nome. O 1 (Medium) foi conferido com o jogo; os demais seguem a ordem do jogo.
+$COMPOUND_TYPES = @{ 0 = "Soft"; 1 = "Medium"; 2 = "Hard"; 3 = "Wet" }
 
 # trava do jogo (LMU_SharedMemoryLockData): { LONG waiters; LONG busy; }
 $LOCK_MAP_NAME        = "LMU_SharedMemoryLockData"
@@ -292,7 +295,7 @@ while ($true) {
 
                     # so LMU: pneus e energia virtual (vem da telemetria do mesmo slot)
                     $carName = $vehicleName
-                    $tyreFront = $null; $tyreRear = $null; $tyreWear = $null
+                    $tyreFront = $null; $tyreRear = $null; $tyreWear = $null; $tyres = $null
                     $virtualEnergy = $null; $lapInvalid = ($buf[$v + $V_COUNT_LAP_FLAG] -ne 2)
                     if ($telemBySlot.ContainsKey($slot)) {
                         $t = $telemBySlot[$slot]
@@ -302,6 +305,12 @@ while ($true) {
                         $tyreRear = Read-CString $buf ($t + $T_REAR_COMPOUND) 18
                         $tyreWear = @(0, 1, 2, 3 | ForEach-Object {
                             [math]::Round([BitConverter]::ToDouble($buf, $t + $T_WHEEL + ($_ * $WHEEL_SIZE) + $W_WEAR), 3)
+                        })
+                        # composto de cada roda (diant. esq, diant. dir, tras. esq, tras. dir):
+                        # no LMU da para montar um composto diferente em cada uma
+                        $tyres = @(0, 1, 2, 3 | ForEach-Object {
+                            $type = [int]$buf[$t + $T_WHEEL + ($_ * $WHEEL_SIZE) + $W_COMPOUND_TYPE]
+                            if ($COMPOUND_TYPES.ContainsKey($type)) { $COMPOUND_TYPES[$type] } else { "" }
                         })
                         $lapInvalid = ($buf[$t + $T_LAP_INVALIDATED] -ne 0)
                         # carros sem energia virtual (ex: LMP2) vem com 0 e tem combustivel
@@ -342,6 +351,7 @@ while ($true) {
                         pitStops      = [int][BitConverter]::ToInt16($buf, $v + $V_NUM_PITSTOPS)
                         tyreFront     = $tyreFront
                         tyreRear      = $tyreRear
+                        tyres         = $tyres
                         tyreWear      = $tyreWear
                         virtualEnergy = $virtualEnergy
                     })

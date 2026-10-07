@@ -1,7 +1,7 @@
-# LLG Overlay (AMS2, LMU e ACC)
+# LLG Overlay (AMS2, LMU, ACC e Assetto Corsa)
 
 Tabela de tempos, driver card e tela de pontuação para transmissões do
-Automobilista 2, do Le Mans Ultimate e do Assetto Corsa Competizione, com integração opcional com o Racing League Tools (RLT) e o OBS.
+Automobilista 2, do Le Mans Ultimate, do Assetto Corsa Competizione e do Assetto Corsa, com integração opcional com o Racing League Tools (RLT) e o OBS.
 
 ```
 ├── start.bat              # sobe tudo: servidor, listener e hotkeys
@@ -118,6 +118,42 @@ O que muda no ACC:
 - **Não existe no ACC**: abandono (DNF), safety car e a linha de "causou bandeira".
 - As corridas são por tempo, então o cabeçalho mostra o relógio e não voltas.
 
+## Assetto Corsa (o primeiro)
+
+O Assetto Corsa só mostra para programas de fora os dados do carro do jogador.
+Os dados de todos os carros só existem para apps Python que rodam dentro do
+jogo, então a overlay tem um app pequeno, sem janela, em `ac-app/LLGOverlay`.
+Ele manda os carros para o servidor (`server/acClient.js`), e o `listener.ps1`
+completa com a sessão atual e o tempo restante.
+
+Instalação, uma vez só: no painel, no fim da página, clique em **Instalar no
+Assetto Corsa 1**. O botão acha o jogo nas bibliotecas da Steam, copia o app e
+o ativa. Depois entre de novo na sessão. Se preferir fazer à mão:
+
+1. Copie a pasta `ac-app/LLGOverlay` para `<Assetto Corsa>\apps\python\`.
+2. Ative o app: no jogo, em Opções > Geral > UI Modules, marque "LLG Overlay".
+   Ou acrescente em `Documentos\Assetto Corsa\cfg\python.ini`:
+
+   ```ini
+   [LLGOVERLAY]
+   ACTIVE=1
+   ```
+
+3. Entre de novo na sessão. O jogo só carrega apps quando a sessão abre.
+
+Funciona com o jogo puro, sem Content Manager nem Custom Shaders Patch.
+
+O que muda no Assetto Corsa:
+- **Piloto em foco**: o carro em foco na câmera do jogo.
+- **Classe**: o jogo não tem classes de corrida. Vale a etiqueta com `#` do
+  carro (`#GT3`, `#Supercars`...); sem ela, `Street` ou `Race`. Para trocar os
+  nomes, use `AC_CLASS_NAMES` no `drivers-config.js`.
+- **Nome do carro, equipe e número** vêm das pastas do carro e da pintura
+  (`ui_car.json` e `ui_skin.json`).
+- **Corrida por voltas** mostra voltas no cabeçalho; por tempo, o relógio.
+- **Não existe no Assetto Corsa**: abandono (DNF), safety car, volta de
+  formação e a linha de "causou bandeira".
+
 ## Aplicativo (.exe)
 
 Para quem só quer usar, sem instalar Node nem abrir terminal:
@@ -129,10 +165,23 @@ npm run build
 
 Isso gera a pasta `dist/LLG Overlay-win32-x64` (não compactada, cerca de
 370 MB). Copie a pasta inteira para quem for usar; dentro dela está o
-`LLG Overlay.exe` e um `LEIA-ME.txt`. A **chave do RLT** do seu `.env` vai
-embutida no aplicativo (`resources/app/.env`), para quem receber a pasta não
-precisar digitar nada. Qualquer pessoa com a pasta consegue ler essa chave,
-então só distribua para quem pode tê-la. O resto do seu `.env` não é copiado.
+`LLG Overlay.exe` e um `LEIA-ME.txt`. Nem a chave do RLT nem o resto do seu
+`.env` vão junto.
+
+**Chave do RLT.** Na primeira vez que alguém abre o aplicativo, o painel pede
+a chave de acesso e a guarda naquele computador (criptografada, no
+`settings.json` da pasta de dados do usuário). Depois disso não pergunta mais.
+Para gerar a chave que você passa para as pessoas:
+
+```bash
+npm run encrypt-key
+```
+
+O comando lê `RLT_API_KEY` do seu `.env` e mostra a chave criptografada
+(começa com `llg1:`). É esse texto que a pessoa cola no aplicativo. Ele também
+fica em `server/rlt-key.enc`, que está fora do git e não entra no aplicativo.
+Quem tem o aplicativo e a chave criptografada consegue, com algum trabalho,
+chegar à chave do RLT, então só passe para quem pode tê-la.
 
 O aplicativo faz sozinho o que o `start.bat` faz em três janelas:
 - sobe o servidor e inicia o listener e os atalhos, escondidos;
@@ -189,7 +238,7 @@ Copie `.env.example` para `.env` e preencha. O `.env` fica fora do git.
 
 | Variável | Para quê |
 | --- | --- |
-| `RLT_API_KEY` | Chave da API do Racing League Tools. Também pode ser salva pelo painel, mas aí vale só até o servidor reiniciar. |
+| `RLT_API_KEY` | Chave da API do Racing League Tools, para quem roda pelo código. Aceita a chave pura ou a criptografada (`llg1:...`). Sem ela, vale a chave salva pelo painel. |
 | `OBS_WS_URL`, `OBS_WS_PASSWORD` | Conexão com o OBS (Ferramentas > WebSocket Server Settings). |
 | `HTTP_PORT`, `BRIDGE_PORT` | Portas do servidor (8080) e do listener (5607). |
 | `ALLOW_LAN` | `1` libera o painel e a overlay para outros aparelhos da rede. |

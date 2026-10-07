@@ -189,3 +189,16 @@ test("troca de piloto: largada e paradas continuam com o carro", () => {
   assert.equal(byName(p, "Piloto B").pit.phase, "in");
   assert.equal(byName(p, "Piloto B").pit.elapsedMs, 40000); // o cronometro do box nao recomecou
 });
+
+test("carro levado para o box depois da bandeirada nao ganha uma parada", () => {
+  const { clock, rs } = setup();
+  const car = { name: "A", position: 1, speedMs: 50, lapsCompleted: 5, currentLap: 6 };
+  rs.apply(payload(5, [car]));
+  clock.t += 20000;
+  rs.apply(payload(5, [car]));
+  clock.t += 200;
+  rs.apply(payload(5, [Object.assign({}, car, { raceState: 3 })]));
+  clock.t += 30000;
+  const p = rs.apply(payload(5, [Object.assign({}, car, { raceState: 3, pitMode: 4, speedMs: 0 })]));
+  assert.equal(byName(p, "A").pit.stops, 0);
+});

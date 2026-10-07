@@ -22,6 +22,7 @@
       teamLogoOverrides: typeof TEAM_LOGO_OVERRIDES !== "undefined" ? TEAM_LOGO_OVERRIDES : {},
       lmuClassNames: typeof LMU_CLASS_NAMES !== "undefined" ? LMU_CLASS_NAMES : {},
       accClassNames: typeof ACC_CLASS_NAMES !== "undefined" ? ACC_CLASS_NAMES : {},
+      acClassNames: typeof AC_CLASS_NAMES !== "undefined" ? AC_CLASS_NAMES : {},
     };
   }
 
@@ -129,12 +130,12 @@
   }
 
   // Troca o nome de classe que o jogo manda pelo nome usado no drivers-config
-  // (LMU_CLASS_NAMES / ACC_CLASS_NAMES), para nomes e cores de classe seguirem
+  // (LMU_CLASS_NAMES / ACC_CLASS_NAMES / AC_CLASS_NAMES), para nomes e cores de classe seguirem
   // a configuracao. Chamado por cada overlay ao receber os dados; o AMS2 nao
   // tem lista porque os nomes dele ja sao as chaves do drivers-config.
   function applyGameClassNames(standings, game) {
     const cfg = config();
-    const names = game === "lmu" ? cfg.lmuClassNames : game === "acc" ? cfg.accClassNames : null;
+    const names = game === "lmu" ? cfg.lmuClassNames : game === "acc" ? cfg.accClassNames : game === "ac" ? cfg.acClassNames : null;
     if (!names) return standings;
     (standings || []).forEach((e) => {
       if (e && e.carClass && names[e.carClass]) e.carClass = names[e.carClass];

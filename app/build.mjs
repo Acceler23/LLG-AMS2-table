@@ -12,8 +12,8 @@ import { fileURLToPath } from "node:url";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // O que NAO vai para o aplicativo. O .env de quem compila pode ter outras
-// coisas (senha do OBS, portas), entao ele nao e copiado: so a chave do RLT
-// e gravada num .env novo dentro do aplicativo (ver o fim deste arquivo).
+// coisas (senha do OBS, portas), entao ele nao e copiado. A chave do RLT tambem
+// nao vai: o aplicativo pede a chave criptografada na primeira vez que abre.
 const ignore = [
   /^\/dist($|\/)/,
   /^\/test($|\/)/,
@@ -23,6 +23,7 @@ const ignore = [
   /^\/\.claude($|\/)/,
   /^\/\.env$/,
   /^\/settings\.json$/,
+  /^\/server\/rlt-key\.enc$/,
   /^\/drivers-config_bak\.js$/,
   // headers dos jogos: so referencia para desenvolvimento, e os do LMU nao podem ser redistribuidos
   /^\/SharedMemory_LMU($|\/)/,
@@ -55,30 +56,6 @@ const [outDir] = await packager({
   prune: true,
   ignore,
 });
-
-// Chave do RLT da liga embutida no aplicativo, para quem receber a pasta nao
-// precisar digitar nada. Vem de RLT_API_KEY (ambiente ou .env da raiz).
-// Atencao: qualquer pessoa com a pasta consegue ler essa chave.
-function readRltKey() {
-  if (process.env.RLT_API_KEY) return process.env.RLT_API_KEY.trim();
-  try {
-    const m = fs.readFileSync(path.join(root, ".env"), "utf8").match(/^\s*RLT_API_KEY\s*=\s*(\S+)/m);
-    return m ? m[1].replace(/^["']|["']$/g, "") : "";
-  } catch {
-    return "";
-  }
-}
-
-const rltKey = readRltKey();
-if (rltKey) {
-  fs.writeFileSync(
-    path.join(outDir, "resources", "app", ".env"),
-    `# Gerado pelo build: chave do RLT da liga embutida no aplicativo.\r\nRLT_API_KEY=${rltKey}\r\n`
-  );
-  console.log("Chave do RLT embutida no aplicativo (resources/app/.env).");
-} else {
-  console.log("Sem RLT_API_KEY no .env: o aplicativo vai pedir a chave no painel.");
-}
 
 fs.writeFileSync(
   path.join(outDir, "LEIA-ME.txt"),

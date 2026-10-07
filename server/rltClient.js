@@ -3,10 +3,13 @@ const REFRESH_MS = 5 * 60 * 1000;
 
 const { normalizeName } = require("../overlay/shared/names");
 const { normalizeColor } = require("../overlay/shared/colors");
+const secret = require("./secret");
 
-// A chave vem da variavel RLT_API_KEY (arquivo .env na raiz do projeto) ou
-// do painel de controle. Nunca escreva a chave neste arquivo: ele vai pro git.
-let apiKey = String(process.env.RLT_API_KEY || "bdc181b61f277ee632fce5c1af6d2b46ef836def631b102545384d5e9d1ececc").trim();
+// A chave vem do painel de controle (pedida na primeira vez que o aplicativo
+// abre e guardada criptografada no settings.json) ou, para quem desenvolve,
+// da variavel RLT_API_KEY (.env) ou do server/rlt-key.enc. Esses dois ficam
+// fora do git e nao vao para o aplicativo. Nunca escreva a chave neste arquivo.
+let apiKey = secret.reveal(process.env.RLT_API_KEY) || secret.readKeyFile();
 let selectedSeasonId = null;
 let refreshTimer = null;
 let onRefreshCb = null;
