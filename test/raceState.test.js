@@ -172,3 +172,33 @@ test("classificacao: OUT some ao cruzar a linha, mesmo sem o numero da volta sub
   assert.equal(opened.phase, null);
   assert.equal(tick({ pitMode: 0, totalDistance: 2500 }).outLap, false);
 });
+
+test("troca de piloto: largada e paradas continuam com o carro", () => {
+  const { clock, rs } = setup();
+  const car = (name, extra) => Object.assign({ name, slot: 7, carNumber: "23", position: 3, speedMs: 50, lapsCompleted: 10, currentLap: 11 }, extra);
+  rs.apply(payload(5, [car("Piloto A")]));
+  clock.t += 20000;
+  rs.apply(payload(5, [car("Piloto A")]));
+  // entra no box, troca de piloto, sai
+  clock.t += 200;
+  rs.apply(payload(5, [car("Piloto A", { pitMode: 2 })]));
+  clock.t += 40000;
+  let p = rs.apply(payload(5, [car("Piloto B", { pitMode: 2, position: 5 })]));
+  assert.equal(byName(p, "Piloto B").startPosition, 3); // largada do carro
+  assert.equal(byName(p, "Piloto B").pit.stops, 1); // a parada nao foi contada de novo
+  assert.equal(byName(p, "Piloto B").pit.phase, "in");
+  assert.equal(byName(p, "Piloto B").pit.elapsedMs, 40000); // o cronometro do box nao recomecou
+});
+
+test("carro levado para o box depois da bandeirada nao ganha uma parada", () => {
+  const { clock, rs } = setup();
+  const car = { name: "A", position: 1, speedMs: 50, lapsCompleted: 5, currentLap: 6 };
+  rs.apply(payload(5, [car]));
+  clock.t += 20000;
+  rs.apply(payload(5, [car]));
+  clock.t += 200;
+  rs.apply(payload(5, [Object.assign({}, car, { raceState: 3 })]));
+  clock.t += 30000;
+  const p = rs.apply(payload(5, [Object.assign({}, car, { raceState: 3, pitMode: 4, speedMs: 0 })]));
+  assert.equal(byName(p, "A").pit.stops, 0);
+});

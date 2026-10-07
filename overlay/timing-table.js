@@ -3,7 +3,7 @@ const DEMO = params.get("demo") === "1";
 
 const WS_URL = `ws://${location.hostname}:${location.port || 8080}/ws`;
 
-const RIGHT_COLUMN_MODES = ["Intervalo", "Gap líder", "Última volta", "Melhor volta", "Posições", "Paradas", "Stint", "VMax"];
+const RIGHT_COLUMN_MODES = ["Intervalo", "Gap líder", "Última volta", "Melhor volta", "Posições", "Paradas", "Stint", "VMax", "Pneus"];
 let rightColumnIndex = 0;
 
 const PAGE_MODES_ALL = ["Geral", "Multiclasse", "Minha classe"];
@@ -11,6 +11,162 @@ let pageIndex = 0;
 
 let rltConfig = null;
 const RLT_MATCH_MIN = 0.98;
+
+// ---- so no Le Mans Ultimate: pneus e energia virtual (VE) ----
+// Ficam FORA da tabela, a direita de cada linha (como o relogio da volta
+// mais rapida), em elementos criados por updateLmuSide(). A tabela em si nao
+// muda de largura. Os dados vem do listener-lmu.ps1.
+
+// composto -> letra e classe de cor do "pneu"
+function tyreCompound(name) {
+  const n = String(name || "").trim().toLowerCase();
+  if (!n) return null;
+  // Assetto Corsa: o jogo manda a sigla do composto (S, M, H, SH, SM...).
+  // As cores seguem o "Pirelli rainbow" de 2018 (classes rb-*, no CSS).
+  if (n.length <= 3) {
+    if (n === "wet") return { letter: "W", cls: "wet" }; // nome inteiro do LMU, com 3 letras
+    const letter = n.toUpperCase();
+    const rainbow = { sh: "superhard", h: "hard", m: "medium", s: "soft", ss: "supersoft", us: "ultrasoft", hs: "hypersoft" };
+    if (rainbow[n]) return { letter, cls: `rb-${rainbow[n]}` };
+    if (n === "w") return { letter, cls: "wet" };
+    if (n === "i") return { letter, cls: "inter" };
+    return { letter, cls: "other" };
+  }
+  if (n.includes("wet") || n.includes("rain") || n.includes("chuva")) return { letter: "W", cls: "wet" };
+  if (n.includes("inter")) return { letter: "I", cls: "inter" };
+  if (n.includes("soft") || n.includes("macio")) return { letter: "S", cls: "soft" };
+  if (n.includes("med")) return { letter: "M", cls: "medium" };
+  if (n.includes("hard") || n.includes("duro")) return { letter: "H", cls: "hard" };
+  return { letter: n[0].toUpperCase(), cls: "other" };
+}
+
+// Pneu: letra do composto (dianteiro e traseiro, se forem diferentes).
+function tyreBadges(entry) {
+  // LMU: composto de cada roda (diant. esq, diant. dir, tras. esq, tras. dir).
+  // Todos iguais: um circulo com a letra. Algum diferente: uma grade 2 x 2 so
+  // com a cor de cada composto, na posicao em que as rodas estao no carro.
+  const wheels = Array.isArray(entry.tyres) && entry.tyres.length === 4 ? entry.tyres.map(tyreCompound) : null;
+  if (wheels && wheels.every(Boolean)) {
+    if (wheels.every((w) => w.cls === wheels[0].cls && w.letter === wheels[0].letter)) {
+      return { html: `<span class="tyre-badge ${wheels[0].cls}">${wheels[0].letter}</span>`, pair: false };
+    }
+    const cells = wheels.map((w) => `<span class="tyre-cell ${w.cls}"></span>`).join("");
+    return { html: `<span class="tyre-grid">${cells}</span>`, pair: false };
+  }
+  const front = tyreCompound(entry.tyreFront);
+  const rear = tyreCompound(entry.tyreRear);
+  let html = "";
+  if (front) html += `<span class="tyre-badge ${front.cls}">${front.letter}</span>`;
+  const pair = !!(front && rear && rear.letter !== front.letter);
+  if (rear && (!front || pair)) html += `<span class="tyre-badge ${rear.cls}">${rear.letter}</span>`;
+  return { html, pair };
+}
+
+// A pagina "Pneus" da coluna da direita so entra no rodizio quando o jogo
+// informa o composto. No LMU os pneus ja ficam ao lado da tabela.
+function rightModeAvailable(mode) {
+  if (mode !== "Pneus") return true;
+  return latestGame !== "lmu" && latestStandings.some((e) => e && (e.tyreFront || e.tyreRear));
+}
+
+function stepRightColumn(dir) {
+  const n = RIGHT_COLUMN_MODES.length;
+  for (let i = 0; i < n; i++) {
+    rightColumnIndex = (rightColumnIndex + dir + n) % n;
+    if (rightModeAvailable(RIGHT_COLUMN_MODES[rightColumnIndex])) return;
+  }
+}
+
+function renderTyreCell(cell, entry) {
+  const { html, pair } = tyreBadges(entry);
+  cell.classList.toggle("pair", pair); // dois compostos: circulos menores para caber
+  if (cell.dataset.html !== html) {
+    cell.innerHTML = html;
+    cell.dataset.html = html;
+  }
+}
+
+// VE: energia virtual restante em %. Carros sem VE (ex: LMP2) ficam em branco.
+function renderEnergyCell(cell, entry) {
+  const ve = entry.virtualEnergy;
+  if (typeof ve !== "number") {
+    cell.textContent = "";
+    cell.className = "energy";
+    return;
+  }
+  const pct = Math.round(ve * 100);
+  cell.textContent = `${pct}%`;
+  cell.className = "energy" + (pct < 15 ? " low" : pct < 30 ? " mid" : "");
+}
+
+const LMU_SIDE_WIDTH = 70; // px, igual ao .lmu-side do CSS
+const LMU_SIDE_GAP = 2;
+const lmuSideEls = [];
+let lmuSideHead = null;
+
+function lmuSideElement(i) {
+  while (lmuSideEls.length <= i) {
+    const el = document.createElement("div");
+    el.className = "lmu-side";
+    el.innerHTML = '<span class="tyre"></span><span class="energy"></span>';
+    document.body.appendChild(el);
+    lmuSideEls.push(el);
+  }
+  return lmuSideEls[i];
+}
+
+// Posiciona pneus e VE ao lado de cada linha de piloto que esta na tela.
+// Devolve a largura ocupada ao lado da tabela (0 fora do LMU), para o
+// relogio da volta mais rapida ficar depois dela.
+function updateLmuSide(standings) {
+  const table = document.getElementById("timing-table");
+  const show = latestGame === "lmu" && !showingStandings();
+  const rows = [];
+  if (show && table) {
+    document.querySelectorAll("#rows > .row").forEach((el) => {
+      if (el.dataset.kind === "row") rows.push(el);
+    });
+  }
+  const byName = new Map((standings || []).map((e) => [e.name, e]));
+  const top0 = table ? table.offsetTop + table.clientTop : 0;
+  const left = table
+    ? CLOCK_SIDE === "left"
+      ? table.offsetLeft - LMU_SIDE_WIDTH - LMU_SIDE_GAP
+      : table.offsetLeft + table.offsetWidth + LMU_SIDE_GAP
+    : 0;
+
+  let used = 0;
+  rows.forEach((row) => {
+    const entry = byName.get(row.dataset.name);
+    if (!entry) return;
+    const el = lmuSideElement(used++);
+    renderTyreCell(el.querySelector(".tyre"), entry);
+    renderEnergyCell(el.querySelector(".energy"), entry);
+    el.style.top = `${top0 + row.offsetTop}px`;
+    el.style.height = `${row.offsetHeight}px`;
+    el.style.left = `${left}px`;
+    el.classList.add("visible");
+  });
+  for (let i = used; i < lmuSideEls.length; i++) lmuSideEls[i].classList.remove("visible");
+
+  // titulos "Pneu" e "VE", na altura do cabecalho da tabela
+  if (!lmuSideHead) {
+    lmuSideHead = document.createElement("div");
+    lmuSideHead.className = "lmu-side head";
+    lmuSideHead.innerHTML = '<span class="tyre">Pneu</span><span class="energy">VE</span>';
+    document.body.appendChild(lmuSideHead);
+  }
+  const header = table ? table.querySelector(".header") : null;
+  if (used > 0 && header) {
+    lmuSideHead.style.top = `${top0 + header.offsetTop}px`;
+    lmuSideHead.style.height = `${header.offsetHeight}px`;
+    lmuSideHead.style.left = `${left}px`;
+    lmuSideHead.classList.add("visible");
+  } else {
+    lmuSideHead.classList.remove("visible");
+  }
+  return used > 0 ? LMU_SIDE_WIDTH + LMU_SIDE_GAP : 0;
+}
 
 // Degrade suave com a cor principal da equipe (RLT) no fundo da linha.
 // A intensidade vem da variavel CSS --team-tint, controlada pelo painel.
@@ -235,6 +391,7 @@ function slotsPerClass(groups) {
 }
 
 let latestStandings = [];
+let latestGame = "ams2"; // "ams2" ou "lmu" (vem no payload do listener)
 let latestSessionLabel = null;
 let latestSessionState = null;
 let latestLapsInEvent = 0;
@@ -275,6 +432,7 @@ function isRaceSession() {
 let lastSessionKey = null;
 let trackLengthM = 0;
 const gapTracker = LLGGaps.createGapTracker();
+const gapSmoother = LLGGaps.createGapSmoother(); // evita o ultimo digito do gap ficar piscando
 
 // Estado que so vale dentro de uma sessao e mora nesta pagina. Largada,
 // paradas e bandeiradas ficam no servidor (server/raceState.js).
@@ -282,6 +440,7 @@ function resetSessionLocalState() {
   frozenGaps.clear();
   sessionDriverCache.clear();
   gapTracker.reset();
+  gapSmoother.reset();
   garageSince.clear();
   sectorState.clear();
   lastDisplayPos.clear();
@@ -335,15 +494,26 @@ function isObserver(entry) {
 
 const sessionDriverCache = new Map();
 
+// Identifica o CARRO de uma linha, para reconhecer troca de piloto: mesma
+// vaga na sessao, mesmo modelo e mesmo numero (quando o jogo informa o numero).
+// Devolve null se o jogo nao manda a vaga.
+function sameCarKey(e) {
+  if (e.slot == null) return null;
+  return `${e.slot}|${e.carName || ""}|${e.carNumber != null ? e.carNumber : ""}`;
+}
+
 function mergeDisconnectedDrivers(standings) {
   if (!isRaceSession()) {
     sessionDriverCache.clear();
     return standings;
   }
   const present = new Set();
+  const presentCars = new Set(); // carros na pista agora (ver sameCarKey)
   (standings || []).forEach((e) => {
     if (!e || !e.name) return;
     present.add(e.name);
+    const car = sameCarKey(e);
+    if (car) presentCars.add(car);
     if (e.name !== "Player" && (e.lapsCompleted > 0 || e.currentLap > 1 || e.position > 0)) {
       sessionDriverCache.set(e.name, Object.assign({}, e));
     }
@@ -351,6 +521,13 @@ function mergeDisconnectedDrivers(standings) {
   const merged = (standings || []).slice();
   sessionDriverCache.forEach((cached, name) => {
     if (present.has(name)) return;
+    // Troca de piloto: o nome sumiu, mas o carro dele continua na pista com
+    // outro piloto. Nao e abandono: o piloto antigo simplesmente sai da lista.
+    const car = sameCarKey(cached);
+    if (car && presentCars.has(car)) {
+      sessionDriverCache.delete(name);
+      return;
+    }
     if (!(cached.lapsCompleted > 0 || cached.currentLap > 1)) return;
     merged.push(
       Object.assign({}, cached, {
@@ -379,6 +556,8 @@ function sortRaceOrder(a, b) {
 function handleStandings(payload) {
   const raw = Array.isArray(payload) ? payload : payload.standings || [];
   const session = Array.isArray(payload) ? null : payload.session;
+  latestGame = (!Array.isArray(payload) && payload.game) || "ams2";
+  LLGDisplay.applyGameClassNames(raw, latestGame); // classes do LMU com os nomes do drivers-config
 
   if (session) {
     latestSessionState = typeof session.state === "number" ? session.state : (session.state != null ? Number(session.state) : null);
@@ -407,6 +586,16 @@ function handleStandings(payload) {
   render(latestStandings);
 }
 
+// O servidor manda a "versao" dos arquivos da overlay ao conectar e de tempos
+// em tempos. Se ela mudar (programa atualizado, arquivo editado), a pagina se
+// recarrega sozinha, para o OBS nunca ficar rodando codigo antigo.
+let overlayBuildId = null;
+function checkBuildId(id) {
+  if (!id) return;
+  if (overlayBuildId === null) overlayBuildId = id;
+  else if (id !== overlayBuildId) location.reload();
+}
+
 function connect() {
   const socket = new WebSocket(WS_URL);
   socket.addEventListener("message", (event) => {
@@ -418,6 +607,8 @@ function connect() {
     }
     if (msg.type === "standings") {
       handleStandings(msg.data || []);
+    } else if (msg.type === "hello") {
+      checkBuildId(msg.buildId);
     } else if (msg.type === "overlayCommand") {
       applyOverlayCommand(msg.name, msg.payload || {});
     } else if (msg.type === "rltConfig") {
@@ -429,21 +620,22 @@ function connect() {
       if (latestStandings.length) render(latestStandings);
     }
   });
-  socket.addEventListener("close", () => setTimeout(connect, 2000));
+  // servidor reiniciando: tenta de novo logo, para a overlay voltar rapido
+  socket.addEventListener("close", () => setTimeout(connect, 500));
 }
 
 function applyOverlayCommand(name, payload = {}) {
   if (name === "overlay.prevColumn") {
-    if (standingsView) {
+    if (showingStandings()) {
       standingsColumnIndex = (standingsColumnIndex - 1 + STANDINGS_COLUMN_MODES.length) % STANDINGS_COLUMN_MODES.length;
     } else {
-      rightColumnIndex = (rightColumnIndex - 1 + RIGHT_COLUMN_MODES.length) % RIGHT_COLUMN_MODES.length;
+      stepRightColumn(-1);
     }
   } else if (name === "overlay.nextColumn") {
-    if (standingsView) {
+    if (showingStandings()) {
       standingsColumnIndex = (standingsColumnIndex + 1) % STANDINGS_COLUMN_MODES.length;
     } else {
-      rightColumnIndex = (rightColumnIndex + 1) % RIGHT_COLUMN_MODES.length;
+      stepRightColumn(1);
     }
   } else if (name === "overlay.prevPage") {
     const modes = activePageModes(latestStandings);
@@ -457,6 +649,9 @@ function applyOverlayCommand(name, payload = {}) {
     playerHighlightEnabled = !playerHighlightEnabled;
   } else if (name === "overlay.toggleStandings") {
     standingsView = !standingsView;
+  } else if (name === "overlay.setStandings") {
+    // usado pela alternancia automatica do servidor (posicoes <-> pontuacao)
+    standingsView = !!payload.value;
   } else if (name === "overlay.resetRace") {
     resetSessionLocalState();
   } else if (name === "overlay.setOpacity") {
@@ -702,7 +897,10 @@ function finishGap(entry, ref) {
 function raceGap(entry, ref) {
   if (!ref || ref === entry) return { text: "Líder", cls: "" };
   const g = gapTracker.gap(entry.name, ref.name, trackLengthM);
-  if (g) return g.laps ? lapsBehindText(g.laps) : { text: `+${g.sec.toFixed(1)}`, cls: "" };
+  if (g) {
+    if (g.laps) return lapsBehindText(g.laps);
+    return { text: `+${gapSmoother.value(`${entry.name}>${ref.name}`, g.sec).toFixed(1)}`, cls: "" };
+  }
 
   // sem historico ainda (overlay recem-aberta): estimativa distancia/velocidade
   if (typeof ref.totalDistance !== "number" || typeof entry.totalDistance !== "number") return { text: "-", cls: "" };
@@ -713,9 +911,17 @@ function raceGap(entry, ref) {
   return { text: `+${(behind / entry.speedMs).toFixed(1)}`, cls: "" };
 }
 
+// AMS2: na primeira volta a distancia percorrida que o jogo informa nao serve
+// (ela volta para tras quando o carro cruza a linha na largada), entao o
+// intervalo so aparece a partir da segunda volta. Nos outros jogos a distancia
+// vale desde a largada e o intervalo aparece logo.
+function firstLapWithoutGap(entry) {
+  return latestGame === "ams2" && (!entry.lapsCompleted || entry.currentLap <= 1);
+}
+
 function formatLeaderGap(entry, bestFastestMs) {
   if (!isRaceSession()) return formatQualGap(entry, bestFastestMs);
-  if (!entry.lapsCompleted && entry.currentLap <= 1) return { text: "-", cls: "" };
+  if (firstLapWithoutGap(entry)) return { text: "-", cls: "" };
   return raceGap(entry, entry._leader);
 }
 
@@ -726,6 +932,7 @@ function rightColumnValue(entry, change, bestFastestMs, aheadFastestMs) {
 
   const mode = RIGHT_COLUMN_MODES[rightColumnIndex];
   const pit = pitInfo(entry);
+  if (mode === "Pneus") return { text: "", html: tyreBadges(entry).html, cls: "tyres", pitPhase: pit.phase };
   const raceGapMode = isRaceSession() && (mode === "Intervalo" || mode === "Gap líder");
 
   if (raceGapMode && (pit.phase === "in" || pit.phase === "out")) {
@@ -938,8 +1145,7 @@ function formatGap(entry, change, aheadFastestMs) {
     return formatQualGap(entry, aheadFastestMs);
   }
 
-  const firstLap = !entry.lapsCompleted || entry.currentLap <= 1;
-  if (firstLap) return formatPosChange(change);
+  if (firstLapWithoutGap(entry)) return formatPosChange(change);
 
   return raceGap(entry, entry._ahead);
 }
@@ -1106,7 +1312,13 @@ function currentPageLabel(standings) {
   return mode;
 }
 
-let standingsView = false;
+let standingsView = false; // pontuacao pedida (tecla 0, painel ou alternancia automatica)
+
+// A tela de pontuacao so existe com temporada do RLT aplicada. Sem ela, o
+// pedido e ignorado e a tabela de tempos continua na tela.
+function showingStandings() {
+  return standingsView && !!(rltConfig && rltConfig.standingsRows && rltConfig.standingsRows.length);
+}
 const STANDINGS_COLUMN_MODES = ["Pts", "Pts proj.", "Gap líder"];
 let standingsColumnIndex = 0;
 const RACE_POINTS_FALLBACK = [45, 38, 32, 27, 23, 20, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5];
@@ -1502,13 +1714,15 @@ function clockElement(i) {
   return clockEls[i];
 }
 
-function updateFastLapClock(standings) {
+// sideOffset: largura ja ocupada ao lado da tabela (pneus e VE do LMU)
+function updateFastLapClock(standings, sideOffset) {
   const table = document.getElementById("timing-table");
   if (!table) return;
+  const offset = sideOffset || 0;
   table.classList.toggle("clock-left", CLOCK_SIDE === "left");
 
   const rows = [];
-  if (!standingsView && isRaceSession()) {
+  if (!showingStandings() && isRaceSession()) {
     const perClass = currentPageMode(standings) !== "Geral";
     const names = new Set(fastestLapHolders(standings, perClass).map((e) => e.name));
     // so as linhas na tela: o piloto pode estar numa pagina nao exibida
@@ -1525,23 +1739,28 @@ function updateFastLapClock(standings) {
     clock.style.top = `${table.offsetTop + table.clientTop + row.offsetTop + (row.offsetHeight - h) / 2}px`;
     clock.style.left =
       CLOCK_SIDE === "left"
-        ? `${table.offsetLeft - w - CLOCK_GAP}px`
-        : `${table.offsetLeft + table.offsetWidth + CLOCK_GAP}px`;
+        ? `${table.offsetLeft - offset - w - CLOCK_GAP}px`
+        : `${table.offsetLeft + table.offsetWidth + offset + CLOCK_GAP}px`;
     clock.classList.add("visible");
   });
   for (let i = rows.length; i < clockEls.length; i++) clockEls[i].classList.remove("visible");
 }
 
 function render(standings) {
+  // game-lmu: so abre espaco a esquerda no modo ?clock=left (ver CSS)
+  document.getElementById("timing-table").classList.toggle("game-lmu", latestGame === "lmu" && !showingStandings());
   renderTable(standings);
-  updateFastLapClock(standings);
+  // LMU: pneus e VE ao lado da tabela; o relogio fica depois deles
+  updateFastLapClock(standings, updateLmuSide(standings));
 }
 
 function renderTable(standings) {
-  if (standingsView) {
+  if (showingStandings()) {
     renderStandings(standings);
     return;
   }
+  // trocou de jogo e a pagina de pneus deixou de existir: volta para a primeira
+  if (!rightModeAvailable(RIGHT_COLUMN_MODES[rightColumnIndex])) rightColumnIndex = 0;
   document.getElementById("rightColumnLabel").textContent = RIGHT_COLUMN_MODES[rightColumnIndex];
   document.getElementById("timing-table").classList.remove("wide-right");
   document.getElementById("pageLabel").textContent = currentPageLabel(standings);
@@ -1770,7 +1989,15 @@ function renderTable(standings) {
     const aheadFast = item.aheadFastestMs != null ? item.aheadFastestMs : prevFastestMs;
     const rv = rightColumnValue(entry, change, rowBestFastest, aheadFast);
     const rvEl = el.querySelector(".right-value");
-    rvEl.textContent = rv.text;
+    if (rv.html != null) {
+      if (rvEl.dataset.html !== rv.html) {
+        rvEl.innerHTML = rv.html;
+        rvEl.dataset.html = rv.html;
+      }
+    } else {
+      rvEl.textContent = rv.text;
+      delete rvEl.dataset.html;
+    }
     rvEl.className = "col right-value" + (rv.cls ? ` ${rv.cls}` : "");
 
     const badge = el.querySelector(".pit-badge");
@@ -1830,10 +2057,12 @@ document.addEventListener("keydown", (e) => {
     render(latestStandings);
     return;
   }
-  if (c === "Comma" || k === ",") applyOverlayCommand("overlay.prevColumn");
-  else if (c === "Period" || k === ".") applyOverlayCommand("overlay.nextColumn");
-  else if (c === "BracketLeft" || k === "[" || k === "{") applyOverlayCommand("overlay.prevPage");
-  else if (c === "BracketRight" || k === "]" || k === "}") applyOverlayCommand("overlay.nextPage");
+  // pelo caractere (e.key), nao pela posicao da tecla (e.code): num teclado
+  // ABNT2 a posicao "BracketLeft" e a tecla do acento agudo
+  if (k === ",") applyOverlayCommand("overlay.prevColumn");
+  else if (k === ".") applyOverlayCommand("overlay.nextColumn");
+  else if (k === "[" || k === "{") applyOverlayCommand("overlay.prevPage");
+  else if (k === "]" || k === "}") applyOverlayCommand("overlay.nextPage");
   else if (c === "KeyP" || k === "p" || k === "P") applyOverlayCommand("overlay.toggleHighlight");
 });
 

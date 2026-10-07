@@ -101,5 +101,45 @@
     return { update, gap, reset };
   }
 
-  return { createGapTracker };
+  // Valor de gap ESTAVEL para mostrar na tela.
+  // O gap medido muda um pouco a cada leitura (varias por segundo). Mostrado
+  // direto, o ultimo digito fica trocando sem parar (+2.5, +2.6, +2.5...) e a
+  // tabela parece piscar. Aqui o valor e suavizado e o numero na tela so muda
+  // quando a diferenca e de verdade:
+  //   - media movel com cerca de 1 s de memoria;
+  //   - o decimo mostrado so troca quando o valor suavizado passa do limite
+  //     de arredondamento com folga (histerese), entao nao fica indo e voltando.
+  // Um salto grande (ultrapassagem, box) aparece na hora.
+  const SMOOTH_SECONDS = 1.0; // memoria da media movel
+  const HYSTERESIS = 0.08; // o valor precisa se afastar isso do numero mostrado para ele trocar
+  const JUMP = 1.5; // diferenca tratada como salto: mostra o valor novo direto
+  const FORGET_MS = 3000; // sem leituras por esse tempo: recomeca do zero
+
+  function createGapSmoother() {
+    const states = new Map(); // chave -> { smooth, shown, seenAt }
+
+    // key: identifica o par (ex: "piloto>referencia"); sec: gap medido agora
+    function value(key, sec, now) {
+      const t = now == null ? Date.now() : now;
+      let st = states.get(key);
+      if (!st || t - st.seenAt > FORGET_MS || Math.abs(sec - st.smooth) > JUMP) {
+        st = { smooth: sec, shown: Math.round(sec * 10) / 10, seenAt: t };
+        states.set(key, st);
+        return st.shown;
+      }
+      const dt = Math.max(0, (t - st.seenAt) / 1000);
+      st.smooth += (sec - st.smooth) * (1 - Math.exp(-dt / SMOOTH_SECONDS));
+      st.seenAt = t;
+      if (Math.abs(st.smooth - st.shown) >= HYSTERESIS) st.shown = Math.round(st.smooth * 10) / 10;
+      return st.shown;
+    }
+
+    function reset() {
+      states.clear();
+    }
+
+    return { value, reset };
+  }
+
+  return { createGapTracker, createGapSmoother };
 });

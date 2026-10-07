@@ -6,6 +6,24 @@ socket.addEventListener("open", () => {
   refreshStatus();
 });
 
+// O servidor avisa quando uma temporada e aplicada, inclusive a que ele
+// reaplica sozinho ao abrir. O painel acompanha para mostrar a selecao certa.
+socket.addEventListener("message", async (ev) => {
+  let msg;
+  try {
+    msg = JSON.parse(ev.data);
+  } catch (_) {
+    return;
+  }
+  if (msg.type !== "rltConfig" || !msg.data || !msg.data.seasonId) return;
+  const sel = document.getElementById("rltSeason");
+  const id = String(msg.data.seasonId);
+  if (!Array.from(sel.options).some((o) => o.value === id)) await reloadSeasons();
+  sel.value = id;
+  renderClasses(msg.data.classes || []);
+  renderTeamLogos(msg.data.standingsRows || []);
+});
+
 function send(name, payload = {}) {
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "command", name, payload }));
@@ -47,6 +65,26 @@ function log(msg) {
   const t = new Date().toLocaleTimeString();
   el.textContent = `[${t}] ${msg}\n` + el.textContent;
   console.log("[panel]", msg);
+}
+
+// Assetto Corsa 1: instala o app do jogo (so quando o botao e clicado)
+async function installAcApp() {
+  const btn = document.getElementById("acInstallBtn");
+  const status = document.getElementById("acInstallStatus");
+  btn.disabled = true;
+  status.textContent = "Instalando...";
+  try {
+    const r = await api("/api/ac/install", { method: "POST" });
+    let msg = r.copied || r.enabled ? "Instalado em " + r.gameDir + "." : "Já estava instalado e atualizado em " + r.gameDir + ".";
+    if (!r.active) msg += " O app está desligado no jogo: ative \"LLG Overlay\" em Opções > Geral > UI Modules.";
+    else if (r.copied || r.enabled) msg += " Se o jogo estiver numa sessão, entre nela de novo.";
+    status.textContent = msg;
+    log("Assetto Corsa 1: " + msg);
+  } catch (err) {
+    status.textContent = err.message;
+    log("Assetto Corsa 1: " + err.message);
+  }
+  btn.disabled = false;
 }
 
 async function api(path, opts = {}) {
@@ -115,6 +153,10 @@ async function reloadSeasons() {
   }
 }
 
+// Logos de equipe: um menu com as equipes da temporada e um campo para o
+// arquivo da equipe escolhida.
+const teamLogoTyped = {}; // equipe -> ultimo arquivo digitado nesta sessao do painel
+
 function renderTeamLogos(rows) {
   const box = document.getElementById("teamLogos");
   if (!box) return;
@@ -131,23 +173,39 @@ function renderTeamLogos(rows) {
     box.innerHTML = '<span class="muted">Nenhuma equipe na season</span>';
     return;
   }
-  box.innerHTML = teams
-    .map((t) => {
-      const id = "tl_" + btoa(unescape(encodeURIComponent(t))).replace(/[^a-zA-Z0-9]/g, "");
-      return `<div class="row" style="margin:4px 0">
-        <span class="muted" style="min-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t}">${t}</span>
-        <input id="${id}" type="text" placeholder="arquivo.png (vazio=padrão)" data-team="${t.replace(/"/g, "&quot;")}" />
-        <button onclick="saveTeamLogo('${id}')">OK</button>
-      </div>`;
-    })
-    .join("");
+  const previous = (document.getElementById("teamLogoSelect") || {}).value;
+  box.innerHTML = `<div class="row">
+      <select id="teamLogoSelect" onchange="showTeamLogo()"></select>
+    </div>
+    <div class="row">
+      <input id="teamLogoFile" type="text" placeholder="arquivo.png (vazio=padrão)" />
+      <button onclick="saveTeamLogo()">OK</button>
+    </div>`;
+  const sel = document.getElementById("teamLogoSelect");
+  teams.forEach((t) => {
+    const opt = document.createElement("option");
+    opt.value = t;
+    opt.textContent = t;
+    sel.appendChild(opt);
+  });
+  if (previous && teams.includes(previous)) sel.value = previous;
+  showTeamLogo();
 }
 
-function saveTeamLogo(inputId) {
-  const el = document.getElementById(inputId);
-  if (!el) return;
-  const teamName = el.getAttribute("data-team");
-  const file = (el.value || "").trim() || null;
+function showTeamLogo() {
+  const sel = document.getElementById("teamLogoSelect");
+  const input = document.getElementById("teamLogoFile");
+  if (!sel || !input) return;
+  input.value = teamLogoTyped[sel.value] || "";
+}
+
+function saveTeamLogo() {
+  const sel = document.getElementById("teamLogoSelect");
+  const input = document.getElementById("teamLogoFile");
+  if (!sel || !input || !sel.value) return;
+  const teamName = sel.value;
+  const file = (input.value || "").trim() || null;
+  teamLogoTyped[teamName] = file || "";
   send("overlay.setTeamLogo", { teamName, file });
   log(file ? `Logo ${teamName} → ${file}` : `Logo ${teamName} → padrão`);
 }
@@ -236,13 +294,146 @@ async function resetAssetsBase() {
   await saveAssetsBase();
 }
 
+// Primeira vez: sem chave salva, o painel pede a chave antes de tudo.
+function showFirstRun(show) {
+  document.getElementById("firstRun").style.display = show ? "flex" : "none";
+  if (show) document.getElementById("firstRunKey").focus();
+}
+
+function skipFirstRun() {
+  try {
+    sessionStorage.setItem("skipFirstRun", "1"); // nao pergunta de novo ate fechar o painel
+  } catch (_) {}
+  showFirstRun(false);
+}
+
+async function saveFirstRunKey() {
+  const apiKey = document.getElementById("firstRunKey").value.trim();
+  const status = document.getElementById("firstRunStatus");
+  if (!apiKey) {
+    status.textContent = "Cole a chave primeiro.";
+    return;
+  }
+  const btn = document.getElementById("firstRunBtn");
+  btn.disabled = true;
+  status.textContent = "Conferindo a chave...";
+  try {
+    const body = await api("/api/rlt/key", { method: "POST", body: JSON.stringify({ apiKey }) });
+    document.getElementById("firstRunKey").value = "";
+    status.textContent = "";
+    showFirstRun(false);
+    log(`Chave salva. Seasons ativas: ${(body.seasons || []).length}`);
+    renderSeasons(body.seasons || []);
+    document.getElementById("rltStatus").textContent = JSON.stringify(body.status || {}, null, 0);
+  } catch (e) {
+    status.textContent = "Não funcionou: " + e.message;
+  }
+  btn.disabled = false;
+}
+
 async function refreshStatus() {
   try {
     const body = await api("/api/rlt/status");
     document.getElementById("rltStatus").textContent = JSON.stringify(body, null, 0);
+    let skipped = false;
+    try {
+      skipped = sessionStorage.getItem("skipFirstRun") === "1";
+    } catch (_) {}
+    showFirstRun(!body.hasKey && !skipped);
     if (body.hasKey) {
-      reloadSeasons();
-      }
+      await reloadSeasons();
+      // a temporada aplicada (inclusive a reaplicada ao abrir) aparece selecionada
+      if (body.selectedSeasonId) document.getElementById("rltSeason").value = String(body.selectedSeasonId);
+    }
   } catch (_) {}
   loadAssetsBase();
+}
+
+// ---------------------------------------------------------------- alternancia automatica
+// Posicoes da sessao <-> pontuacao. O servidor guarda a escolha e faz a troca.
+function showAlternateSeconds(value) {
+  document.getElementById("altSecondsVal").textContent = `${value} s`;
+}
+
+function showAlternate(body) {
+  document.getElementById("altEnabled").checked = !!body.enabled;
+  document.getElementById("altSeconds").value = body.seconds;
+  showAlternateSeconds(body.seconds);
+}
+
+async function setAlternate() {
+  try {
+    const body = await api("/api/overlay/alternate", {
+      method: "POST",
+      body: JSON.stringify({
+        enabled: document.getElementById("altEnabled").checked,
+        seconds: Number(document.getElementById("altSeconds").value),
+      }),
+    });
+    showAlternate(body);
+    log(body.enabled ? `Alternando posições e pontuação a cada ${body.seconds} s` : "Alternância desligada");
+  } catch (e) {
+    log("ERRO alternância: " + e.message);
+  }
+}
+
+api("/api/overlay/alternate").then(showAlternate).catch(() => {});
+
+// ---------------------------------------------------------------- links das overlays
+function fillLinks() {
+  const base = `http://localhost:${location.port || 8080}`;
+  document.getElementById("linkTable").value = `${base}/overlay/timing-table.html`;
+  document.getElementById("linkCard").value = `${base}/overlay/driver-card.html`;
+  document.getElementById("linkDriver").value = `${base}/overlay/driver-table.html`;
+}
+
+async function copyLink(id) {
+  const input = document.getElementById(id);
+  input.select();
+  try {
+    await navigator.clipboard.writeText(input.value);
+  } catch (_) {
+    document.execCommand("copy");
+  }
+  log("Link copiado: " + input.value);
+}
+
+fillLinks();
+
+// ---------------------------------------------------------------- aplicativo (.exe)
+// window.llgApp so existe quando o painel roda dentro do aplicativo.
+let driverWindowState = null;
+
+function showDriverWindowState(s) {
+  driverWindowState = s;
+  document.getElementById("drvVisible").checked = !!s.visible;
+  const pct = Math.round((s.scale || 1) * 100);
+  document.getElementById("drvScale").value = pct;
+  document.getElementById("drvScaleVal").textContent = pct + "%";
+  const edit = document.getElementById("drvEdit");
+  edit.textContent = s.edit ? "Travar posição" : "Mover";
+  edit.disabled = !s.visible;
+  document.getElementById("drvHint").textContent = s.edit
+    ? "Arraste a área azul pontilhada até o lugar desejado e clique em Travar posição."
+    : "Travada: os cliques passam direto para o jogo.";
+}
+
+async function setDriverWindow(patch) {
+  if (!window.llgApp) return;
+  showDriverWindowState(await window.llgApp.driver.set(patch));
+}
+
+function toggleDriverEdit() {
+  setDriverWindow({ edit: !(driverWindowState && driverWindowState.edit) });
+}
+
+function setDriverScale(value) {
+  const pct = Math.max(50, Math.min(200, Number(value) || 100));
+  document.getElementById("drvScaleVal").textContent = pct + "%";
+  setDriverWindow({ scale: pct / 100 });
+}
+
+if (window.llgApp) {
+  document.getElementById("appSection").hidden = false;
+  window.llgApp.driver.get().then(showDriverWindowState);
 }

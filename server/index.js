@@ -16,6 +16,17 @@ const { startTcpBridge } = require("./tcpBridge");
 const { connectObs } = require("./obsController");
 const { createRaceState } = require("./raceState");
 const rlt = require("./rltClient");
+const settings = require("./settings");
+const lmuFocus = require("./lmuFocus");
+const { startAccClient } = require("./accClient");
+const { startAcClient } = require("./acClient");
+const { installAcApp } = require("./acInstaller");
+const secret = require("./secret");
+
+// Chave do RLT: a do .env tem prioridade; senao, a ultima salva pelo painel.
+// (ler sempre: uma chave antiga, salva em texto puro, e regravada criptografada)
+const savedRltKey = settings.getSecret("rltApiKey");
+if (!rlt.hasKey() && savedRltKey) rlt.setApiKey(savedRltKey);
 
 const HTTP_PORT = process.env.HTTP_PORT || 8080;
 const BRIDGE_PORT = process.env.BRIDGE_PORT || 5607;
@@ -99,6 +110,40 @@ function resetRace() {
 }
 wss.onCommand("race.reset", resetRace);
 
+// Alternancia automatica entre as posicoes da sessao e a pontuacao do
+// campeonato. Fica no servidor para a tabela e o driver card trocarem juntos.
+// So alterna com temporada do RLT aplicada (sem ela nao existe pontuacao).
+const ALTERNATE_MIN_S = 5;
+const ALTERNATE_MAX_S = 300;
+const alternate = {
+  enabled: !!settings.get("alternateEnabled"),
+  seconds: Math.max(ALTERNATE_MIN_S, Math.min(ALTERNATE_MAX_S, Number(settings.get("alternateSeconds")) || 20)),
+};
+let showStandings = false;
+let alternateTimer = null;
+
+function broadcastStandingsView() {
+  wss.broadcast({ type: "overlayCommand", name: "overlay.setStandings", payload: { value: showStandings } });
+}
+
+function restartAlternate() {
+  clearInterval(alternateTimer);
+  alternateTimer = null;
+  if (!alternate.enabled) {
+    showStandings = false;
+    broadcastStandingsView(); // volta para as posicoes
+    return;
+  }
+  alternateTimer = setInterval(() => {
+    showStandings = rlt.getOverlayPayload() ? !showStandings : false;
+    broadcastStandingsView();
+  }, alternate.seconds * 1000);
+}
+
+app.get("/api/overlay/alternate", (req, res) => {
+  res.json({ ok: true, enabled: alternate.enabled, seconds: alternate.seconds });
+});
+
 function broadcastRlt() {
   const payload = rlt.getOverlayPayload();
   wss.broadcast({ type: "rltConfig", data: payload });
@@ -108,7 +153,37 @@ rlt.onRefresh(() => {
   broadcastRlt();
 });
 
+// "Versao" dos arquivos da overlay: a data de modificacao mais recente entre
+// eles. As paginas comparam com a que receberam ao abrir e se recarregam
+// quando muda, entao o OBS nunca fica rodando uma versao antiga.
+const OVERLAY_DIR = path.join(__dirname, "..", "overlay");
+function overlayBuildId() {
+  let newest = 0;
+  const scan = (dir) => {
+    let names = [];
+    try {
+      names = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+    names.forEach((entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "shared") scan(full); // assets (imagens) nao contam
+      } else if (/\.(js|css|html)$/i.test(entry.name)) {
+        try {
+          newest = Math.max(newest, fs.statSync(full).mtimeMs);
+        } catch (_) {}
+      }
+    });
+  };
+  scan(OVERLAY_DIR);
+  return String(Math.round(newest));
+}
+setInterval(() => wss.broadcast({ type: "hello", buildId: overlayBuildId() }), 5000);
+
 wss.onConnect((socket) => {
+  if (socket.readyState === 1) socket.send(JSON.stringify({ type: "hello", buildId: overlayBuildId() }));
   const payload = rlt.getOverlayPayload();
   if (payload && socket.readyState === 1) {
     socket.send(JSON.stringify({ type: "rltConfig", data: payload }));
@@ -116,6 +191,35 @@ wss.onConnect((socket) => {
   if (socket.readyState === 1) {
     socket.send(JSON.stringify({ type: "assetsConfig", data: assetsConfigPayload() }));
   }
+  // overlay recem-aberta entra na mesma tela que as outras estao mostrando
+  if (alternate.enabled && socket.readyState === 1) {
+    socket.send(JSON.stringify({ type: "overlayCommand", name: "overlay.setStandings", payload: { value: showStandings } }));
+  }
+});
+
+app.post("/api/overlay/alternate", (req, res) => {
+  const body = req.body || {};
+  if (typeof body.enabled === "boolean") alternate.enabled = body.enabled;
+  const seconds = Number(body.seconds);
+  if (Number.isFinite(seconds)) alternate.seconds = Math.max(ALTERNATE_MIN_S, Math.min(ALTERNATE_MAX_S, Math.round(seconds)));
+  settings.set("alternateEnabled", alternate.enabled ? true : null);
+  settings.set("alternateSeconds", alternate.seconds);
+  restartAlternate();
+  res.json({ ok: true, enabled: alternate.enabled, seconds: alternate.seconds });
+});
+
+// Assetto Corsa (o primeiro): instala o app Python da overlay na pasta do jogo.
+// So acontece quando alguem clica no botao do painel.
+app.post("/api/ac/install", async (req, res) => {
+  const r = await installAcApp();
+  if (!r.installed) {
+    const error =
+      r.reason === "sem-jogo"
+        ? "Assetto Corsa nao encontrado nas bibliotecas da Steam. Veja a instalacao manual no README."
+        : "Nao foi possivel instalar o app. Veja a instalacao manual no README.";
+    return res.status(r.reason === "sem-jogo" ? 404 : 500).json({ ok: false, error });
+  }
+  res.json({ ok: true, gameDir: r.gameDir, copied: r.copied, enabled: r.enabled, active: r.active });
 });
 
 app.post("/command", (req, res) => {
@@ -220,11 +324,27 @@ app.get("/api/rlt/drivers", (req, res) => {
 
 app.post("/api/rlt/key", async (req, res) => {
   try {
-    const key = req.body && req.body.apiKey;
+    // Aceita a chave criptografada (a que o organizador distribui, "llg1:...")
+    // ou a chave pura do RLT.
+    const typed = String((req.body && req.body.apiKey) || "").trim();
+    const key = secret.reveal(typed);
+    if (typed && !key) return res.status(400).json({ ok: false, error: "Chave invalida: confira se copiou a chave inteira." });
+    const previous = rlt.getApiKey();
     rlt.setApiKey(key);
-    if (!rlt.hasKey()) return res.json({ ok: true, hasKey: false });
-    await rlt.fetchLeague();
-    await rlt.fetchSeasons();
+    if (!rlt.hasKey()) {
+      settings.set("seasonId", null);
+      settings.set("rltApiKey", null);
+      return res.json({ ok: true, hasKey: false });
+    }
+    try {
+      await rlt.fetchLeague();
+      await rlt.fetchSeasons();
+    } catch (err) {
+      rlt.setApiKey(previous); // a chave nova nao funcionou: continua com a de antes
+      throw err;
+    }
+    settings.set("seasonId", null);
+    settings.setSecret("rltApiKey", rlt.getApiKey()); // so guarda a chave que funcionou (criptografada)
     res.json({
       ok: true,
       hasKey: true,
@@ -275,10 +395,12 @@ app.post("/api/rlt/season", async (req, res) => {
     const seasonId = req.body && req.body.seasonId;
     if (seasonId == null || seasonId === "" || Number(seasonId) === 0) {
       const payload = rlt.clearSeason();
+      settings.set("seasonId", null);
       broadcastRlt();
       return res.json({ ok: true, payload, status: rlt.getStatus(), mode: "game-only" });
     }
     const payload = await rlt.selectSeason(seasonId);
+    settings.set("seasonId", Number(seasonId));
     broadcastRlt();
     res.json({ ok: true, payload, status: rlt.getStatus() });
   } catch (e) {
@@ -289,6 +411,8 @@ app.post("/api/rlt/season", async (req, res) => {
 
 app.post("/api/rlt/clear", (req, res) => {
   rlt.setApiKey("");
+  settings.set("rltApiKey", null);
+  settings.set("seasonId", null);
   wss.broadcast({ type: "rltConfig", data: null });
   res.json({ ok: true });
 });
@@ -296,32 +420,153 @@ app.post("/api/rlt/clear", (req, res) => {
 // Bridge: o listener.ps1 le a Shared Memory do AMS2 e manda o standings em
 // JSON. O raceState acrescenta o que depende de historico (largada, paradas,
 // tempo de box, bandeirada) e o resultado vai pro WebSocket.
+//
+// Varias fontes ficam ligadas ao mesmo tempo: os listeners do AMS2 e do LMU
+// (pela ponte TCP) e o cliente do ACC (direto, pela API de transmissao do jogo).
+// O jogo que esta numa sessao (manda carros) e o "ativo". As outras fontes,
+// que so mandam listas vazias, sao ignoradas para as overlays nao piscarem.
+const GAME_NAMES = { ams2: "Automobilista 2", lmu: "Le Mans Ultimate", acc: "Assetto Corsa Competizione", ac: "Assetto Corsa" };
+let activeGame = null;
+let activeGameSeenAt = 0;
+let activeGameCarsAt = 0; // ultima vez que o jogo ativo mandou carros
+const ACTIVE_GAME_TIMEOUT_MS = 3000;
+
+function acceptPayload(payload) {
+  const game = (payload && payload.game) || "ams2";
+  const cars = payload && Array.isArray(payload.standings) ? payload.standings.length : 0;
+  const now = Date.now();
+  // Outro jogo so toma o lugar do ativo quando o ativo para de mandar carros.
+  // Sem isso, dois jogos em sessao ao mesmo tempo fariam a tabela alternar
+  // entre os dois a cada atualizacao.
+  const activeIsBusy = activeGame !== null && now - activeGameCarsAt <= ACTIVE_GAME_TIMEOUT_MS;
+  if (game !== activeGame && activeIsBusy) return false;
+  if (game === activeGame && cars > 0) activeGameCarsAt = now;
+  if (cars > 0 || game === activeGame || now - activeGameSeenAt > ACTIVE_GAME_TIMEOUT_MS) {
+    if (game !== activeGame && cars > 0) activeGameCarsAt = now;
+    if (game !== activeGame) console.log(`Recebendo dados de: ${GAME_NAMES[game] || game}`);
+    activeGame = game;
+    activeGameSeenAt = now;
+    return true;
+  }
+  return false;
+}
+
+// Caminho unico dos dados de qualquer jogo ate as overlays.
+function handleGamePayload(payload) {
+  if (!acceptPayload(payload)) return;
+  // LMU: o carro em foco vem da API do jogo (funciona tambem como espectador)
+  if (payload.game === "lmu") lmuFocus.apply(payload);
+  const data = raceState.apply(payload);
+  wss.broadcast({ type: "standings", data });
+}
+
+// ACC: sem listener. O servidor fala direto com a API de transmissao do jogo.
+// ACC_API=off desliga o cliente do ACC (usado nos testes, para um servidor de
+// teste nao abrir mais uma conexao no jogo que esta aberto).
+const accDisabled = /^(off|0|false)$/i.test(process.env.ACC_API || "");
+const accClient = accDisabled
+  ? { stop() {}, setGameLive() {} }
+  : startAccClient((payload) => {
+      try {
+        handleGamePayload(payload);
+      } catch (err) {
+        console.error("Erro ao tratar dados do ACC:", err.message);
+      }
+    });
+
+// Assetto Corsa (o primeiro): os carros chegam do app Python que roda dentro
+// do jogo (ac-app/LLGOverlay), por um named pipe. AC_API=off desliga.
+const acDisabled = /^(off|0|false)$/i.test(process.env.AC_API || "");
+const acClient = acDisabled
+  ? { stop() {}, setStatus() {} }
+  : startAcClient((payload) => {
+      try {
+        handleGamePayload(payload);
+      } catch (err) {
+        console.error("Erro ao tratar dados do Assetto Corsa:", err.message);
+      }
+    });
+
+// Ao fechar (Ctrl+C, janela do console fechada, aplicativo encerrando), cancela
+// o registro no ACC. O aplicativo chama shutdown() antes de sair.
+function shutdown() {
+  accClient.stop();
+  acClient.stop();
+}
+if (require.main === module) {
+  ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"].forEach((signal) => {
+    process.on(signal, () => {
+      shutdown();
+      setTimeout(() => process.exit(0), 200);
+    });
+  });
+}
+
 startTcpBridge(BRIDGE_PORT, (buffer) => {
   try {
-    const data = raceState.apply(JSON.parse(buffer.toString("utf8")));
-    wss.broadcast({ type: "standings", data });
+    const payload = JSON.parse(buffer.toString("utf8"));
+    // aviso do listener.ps1: o ACC entrou ou saiu de uma sessao
+    if (payload && payload.accStatus) {
+      accClient.setGameLive(!!payload.accStatus.live);
+      return;
+    }
+    // idem para o Assetto Corsa: sessao atual e tempo restante
+    if (payload && payload.acStatus) {
+      acClient.setStatus(payload.acStatus);
+      return;
+    }
+    handleGamePayload(payload);
   } catch (err) {
     console.error("Erro ao interpretar dados da bridge:", err.message);
   }
 });
 
-// OBS: conexao opcional via obs-websocket, controlada por eventos de telemetria
-// ou por comandos vindos do painel de controle (ver wsServer.js -> onClientMessage)
-connectObs(wss);
+// OBS: conexao opcional via obs-websocket (comandos obs.setScene,
+// obs.startRecord e obs.stopRecord pelo WebSocket). O painel nao tem mais
+// botoes para isso, entao so conecta se o OBS estiver configurado no .env.
+if (process.env.OBS_WS_URL || process.env.OBS_WS_PASSWORD) connectObs(wss);
+
+// Resolvida quando o servidor esta ouvindo; rejeitada se a porta estiver
+// ocupada. O aplicativo (app/main.js) usa isso para avisar o usuario.
+const ready = new Promise((resolve, reject) => {
+  server.once("listening", resolve);
+  server.once("error", reject);
+});
+ready.catch((err) => {
+  console.error(`Nao foi possivel abrir a porta ${HTTP_PORT}: ${err.message}`);
+  if (err.code === "EADDRINUSE") console.error("Ja existe outro programa (ou outra copia deste) usando essa porta.");
+  if (require.main === module) process.exit(1);
+});
 
 server.listen(HTTP_PORT, async () => {
   console.log(`Tabela de tempos em      http://localhost:${HTTP_PORT}/overlay/timing-table.html`);
   console.log(`Driver card overlay em   http://localhost:${HTTP_PORT}/overlay/driver-card.html`);
+  console.log(`Tabela do piloto em      http://localhost:${HTTP_PORT}/overlay/driver-table.html`);
   console.log(`Painel de controle em    http://localhost:${HTTP_PORT}/panel/panel.html`);
-  console.log(`Aguardando o listener.ps1 (rode-o em outra janela) para receber dados do AMS2`);
+  console.log(`Aguardando os jogos: AMS2 (listener.ps1), LMU (listener-lmu.ps1) e ACC (API de transmissao)`);
   console.log(ALLOW_LAN ? "Acesso liberado para a rede local (ALLOW_LAN)." : "Acesso restrito a este computador.");
   console.log(assetsBaseUrl ? `Imagens: ${assetsBaseUrl} (reserva: pasta local)` : "Imagens: somente pasta local.");
-  if (!rlt.hasKey()) console.log("RLT sem chave: defina RLT_API_KEY no arquivo .env ou salve pelo painel.");
+  if (!rlt.hasKey()) console.log("RLT sem chave: salve pelo painel ou defina RLT_API_KEY no arquivo .env.");
   if (rlt.hasKey()) {
     try {
       await rlt.fetchLeague();
       await rlt.fetchSeasons();
+      // reaplica a temporada que estava em uso antes de fechar
+      const savedSeason = settings.get("seasonId");
+      if (savedSeason) {
+        const payload = await rlt.selectSeason(savedSeason);
+        broadcastRlt();
+        console.log(`Temporada do RLT reaplicada: ${(payload && payload.seasonName) || savedSeason}`);
+      } else {
+        rlt.startRefresh();
+      }
+    } catch (err) {
+      console.warn("RLT: nao foi possivel carregar agora:", err.message);
       rlt.startRefresh();
-    } catch (_) {}
+    }
   }
 });
+
+if (alternate.enabled) restartAlternate();
+
+module.exports = { server, ready, shutdown, HTTP_PORT: Number(HTTP_PORT), BRIDGE_PORT: Number(BRIDGE_PORT) };

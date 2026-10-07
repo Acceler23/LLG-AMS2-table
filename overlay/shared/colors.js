@@ -48,5 +48,40 @@
     return luminance(rgb) > 0.179 ? "#000000" : "#ffffff";
   }
 
-  return { normalizeColor, toRgb, mix, luminance, readableOn };
+  // Qualquer cor de CSS usada aqui (hex, rgb(), hsl()) -> [r, g, b], ou null
+  function parseCssColor(c) {
+    const hex = toRgb(c);
+    if (hex) return hex;
+    const s = String(c || "").trim();
+    let m = s.match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i);
+    if (m) return [Number(m[1]), Number(m[2]), Number(m[3])].map((v) => Math.round(v));
+    m = s.match(/^hsla?\(\s*([\d.]+)[\s,]+([\d.]+)%[\s,]+([\d.]+)%/i);
+    if (m) {
+      const h = (Number(m[1]) % 360) / 360;
+      const sat = Number(m[2]) / 100;
+      const l = Number(m[3]) / 100;
+      const q = l < 0.5 ? l * (1 + sat) : l + sat - l * sat;
+      const p = 2 * l - q;
+      const channel = (t) => {
+        let x = t;
+        if (x < 0) x += 1;
+        if (x > 1) x -= 1;
+        if (x < 1 / 6) return p + (q - p) * 6 * x;
+        if (x < 1 / 2) return q;
+        if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6;
+        return p;
+      };
+      return [channel(h + 1 / 3), channel(h), channel(h - 1 / 3)].map((v) => Math.round(v * 255));
+    }
+    return null;
+  }
+
+  // Cor de texto legivel (preto ou branco) sobre um fundo dado como cor de CSS.
+  // Fundo que nao da para interpretar: branco, o padrao das overlays.
+  function readableOnColor(css) {
+    const rgb = parseCssColor(css);
+    return rgb ? readableOn(rgb) : "#ffffff";
+  }
+
+  return { normalizeColor, toRgb, mix, luminance, readableOn, parseCssColor, readableOnColor };
 });

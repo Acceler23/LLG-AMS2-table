@@ -3,6 +3,11 @@ node_modules/
 
 # configuracao local com segredos (chave do RLT, senha do OBS)
 .env
+settings.json
+server/rlt-key.enc
+
+# aplicativo empacotado (npm run build)
+dist/
 
 # lixo de editor/sistema
 *.log

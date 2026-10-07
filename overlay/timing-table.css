@@ -397,3 +397,152 @@ html, body {
 #timing-table.clock-left {
   left: 32px;
 }
+
+/* ---- Le Mans Ultimate: pneus e energia virtual (VE) ao lado da tabela ----
+   Ficam FORA da tabela, a direita de cada linha (como o relogio da volta
+   mais rapida). Os elementos sao criados por updateLmuSide() em
+   timing-table.js. A tabela nao muda de largura; a fonte do OBS precisa de
+   uns 650 px para caber tabela + pneus/VE + relogio. */
+.lmu-side {
+  position: absolute;
+  box-sizing: border-box;
+  width: 70px; /* igual a LMU_SIDE_WIDTH em timing-table.js */
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  align-items: center;
+  /* sem fundo: so o pneu e o numero, com sombra para ler sobre a imagem do jogo */
+  background: none;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.95), 0 1px 2px rgba(0, 0, 0, 0.95);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.lmu-side.visible {
+  visibility: visible;
+}
+
+.lmu-side .tyre {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+/* compostos diferentes na frente e atras: dois circulos menores, encostados */
+.lmu-side .tyre.pair {
+  gap: 0;
+}
+
+.lmu-side .tyre.pair .tyre-badge {
+  width: 15px;
+  height: 15px;
+  border-width: 2px;
+  font-size: 8px;
+}
+
+.lmu-side .energy {
+  text-align: right;
+  padding-right: 3px;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lmu-side .energy.mid { color: #ffd21f; }
+.lmu-side .energy.low { color: #ff5a5a; }
+
+/* titulos "Pneu" e "VE", na altura do cabecalho da tabela */
+.lmu-side.head {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.lmu-side.head .energy {
+  font-size: 10px;
+}
+
+/* ?clock=left no LMU: abre espaco a esquerda para pneus/VE + relogio */
+#timing-table.clock-left.game-lmu {
+  left: 106px;
+}
+
+/* "pneu": circulo com a letra do composto, na cor do composto */
+.tyre-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  /* como no HUD do jogo: so o aro e a letra, na cor do composto, sem fundo */
+  border: 2px solid currentColor;
+  background: none;
+  color: #999;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.9));
+}
+
+/* cores do Le Mans Ultimate: macio branco, medio amarelo, duro vermelho */
+.tyre-badge.soft { color: #f2f2f2; }
+.tyre-badge.medium { color: #ffd21f; }
+.tyre-badge.hard { color: #ff3b3b; }
+.tyre-badge.wet { color: #3d9bff; }
+.tyre-badge.inter { color: #37c871; }
+
+
+/* pagina "Pneus" da coluna da direita (jogos sem ser o LMU): um pneu visto
+   de lado. Disco central na cor do composto com a sigla em preto, um anel
+   preto e, por fora, dois arcos coloridos (em cima e embaixo). */
+.right-value.tyres .tyre-badge {
+  --c: #9a9a9a;
+  vertical-align: middle;
+  width: 34px;
+  height: 34px;
+  border: 1px solid #000;
+  color: #000;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: -0.5px;
+  background:
+    radial-gradient(circle closest-side, var(--c) 0 54%, #0b0b0b 57% 72%, transparent 75%),
+    conic-gradient(from 300deg, var(--c) 0 120deg, #0b0b0b 120deg 180deg, var(--c) 180deg 300deg, #0b0b0b 300deg 360deg);
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.9));
+}
+
+/* cores do "Pirelli rainbow" de 2018; chuva azul e intermediario verde */
+.right-value.tyres .tyre-badge.rb-superhard { --c: #2fb4ff; }
+.right-value.tyres .tyre-badge.rb-hard { --c: #ffffff; }
+.right-value.tyres .tyre-badge.rb-medium { --c: #ffd500; }
+.right-value.tyres .tyre-badge.rb-soft { --c: #e8112d; }
+.right-value.tyres .tyre-badge.rb-supersoft { --c: #a54bd8; }
+.right-value.tyres .tyre-badge.rb-ultrasoft { --c: #ffb3d9; }
+.right-value.tyres .tyre-badge.rb-hypersoft { --c: #ff7a1a; }
+.right-value.tyres .tyre-badge.wet { --c: #1456e0; color: #fff; }
+.right-value.tyres .tyre-badge.inter { --c: #37c871; }
+
+/* LMU com compostos diferentes entre as rodas: 2 x 2 bolinhas com a cor de
+   cada composto, na posicao em que as rodas estao no carro (dianteiras em cima) */
+.tyre-grid {
+  display: inline-grid;
+  grid-template-columns: 9px 9px;
+  grid-auto-rows: 9px;
+  gap: 2px;
+  vertical-align: middle;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.9));
+}
+
+/* como no HUD do jogo: quatro bolinhas, sem fundo */
+.tyre-cell {
+  border-radius: 50%;
+  background: #999;
+}
+
+.tyre-cell.soft { background: #f2f2f2; }
+.tyre-cell.medium { background: #ffd21f; }
+.tyre-cell.hard { background: #ff3b3b; }
+.tyre-cell.wet { background: #3d9bff; }
+.tyre-cell.inter { background: #37c871; }

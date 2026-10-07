@@ -14,10 +14,89 @@
     .class-chip { display: inline-block; padding: 4px 10px; margin: 4px 4px 0 0; border-radius: 4px; font-size: 12px; font-weight: 700; }
     #rltLog { font-family: monospace; font-size: 12px; color: #9f9; white-space: pre-wrap; max-height: 180px; overflow: auto; background: #0a0a0a; padding: 8px; border-radius: 4px; }
     .muted { color: #888; font-size: 12px; }
+    #firstRun { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.85); align-items: center; justify-content: center; padding: 16px; }
+    .first-run-card { background: #1a1a1a; border: 1px solid #444; border-radius: 8px; padding: 20px; max-width: 460px; width: 100%; }
   </style>
 </head>
 <body>
   <h2>Painel de Controle</h2>
+
+  <!-- primeira vez: sem chave salva, pede a chave antes de mostrar o painel -->
+  <div id="firstRun" style="display:none">
+    <div class="first-run-card">
+      <h3 style="margin-top:0">Chave de acesso</h3>
+      <div>Cole a chave que você recebeu do organizador da liga. Ela é pedida só uma vez e fica guardada neste computador.</div>
+      <div class="row">
+        <input id="firstRunKey" type="password" placeholder="Cole a chave aqui" onkeydown="if (event.key === 'Enter') saveFirstRunKey()" />
+        <button id="firstRunBtn" onclick="saveFirstRunKey()">Salvar</button>
+      </div>
+      <div class="muted" id="firstRunStatus"></div>
+      <div class="row">
+        <button onclick="skipFirstRun()">Usar sem chave</button>
+        <span class="muted">Sem a chave a tabela funciona só com os dados do jogo, sem equipes nem pontuação.</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>Temporada (Racing League Tools)</h3>
+  <div class="box">
+    <div class="row">
+      <select id="rltSeason"><option value="">— só dados do jogo (sem season) —</option></select>
+      <button onclick="applySeason()">Aplicar</button>
+      <button onclick="reloadSeasons()">Recarregar</button>
+    </div>
+    <div id="rltClasses"></div>
+    <div class="muted" style="margin-top:10px">API key (header X-API-Key) — <a href="https://racingleaguetools.com/api/docs/" target="_blank" style="color:#6cf">docs</a></div>
+    <div class="row">
+      <input id="rltKey" type="password" placeholder="Cole a chave" />
+      <button onclick="saveKey()">Salvar key</button>
+      <button onclick="clearRlt()">Limpar</button>
+    </div>
+    <div class="muted" id="rltStatus"></div>
+  </div>
+
+  <h3>Links das overlays</h3>
+  <div class="box">
+    <div class="muted">No OBS: adicione uma Fonte de Navegador e cole o link. O fundo já é transparente.</div>
+    <div class="row">
+      <label class="muted" style="min-width:140px">Tabela (transmissão)</label>
+      <input id="linkTable" type="text" readonly onclick="this.select()" />
+      <button onclick="copyLink('linkTable')">Copiar</button>
+    </div>
+    <div class="row">
+      <label class="muted" style="min-width:140px">Driver card</label>
+      <input id="linkCard" type="text" readonly onclick="this.select()" />
+      <button onclick="copyLink('linkCard')">Copiar</button>
+    </div>
+    <div class="row">
+      <label class="muted" style="min-width:140px">Tabela do piloto</label>
+      <input id="linkDriver" type="text" readonly onclick="this.select()" />
+      <button onclick="copyLink('linkDriver')">Copiar</button>
+    </div>
+    <div class="muted">Tamanhos sugeridos da fonte: tabela 540×1080 (650×1080 no LMU, por causa dos pneus e VE ao lado), driver card 560×150, tabela do piloto 340×620.</div>
+  </div>
+
+  <div id="appSection" hidden>
+    <h3>Tabela do piloto (janela sobre o jogo)</h3>
+    <div class="box">
+      <div class="muted">Mostra as posições por classe e a pontuação ao vivo numa janela transparente por cima do jogo. O jogo precisa estar em janela sem bordas; em tela cheia exclusiva a janela não aparece.</div>
+      <div class="row">
+        <label style="min-width:220px"><input id="drvVisible" type="checkbox" style="width:auto" onchange="setDriverWindow({ visible: this.checked })" /> Mostrar sobre o jogo</label>
+        <button id="drvEdit" onclick="toggleDriverEdit()">Mover</button>
+        <button onclick="setDriverWindow({ reset: true })">Posição padrão</button>
+      </div>
+      <div class="row">
+        <label class="muted" style="min-width:140px">Tamanho</label>
+        <input id="drvScale" type="range" min="50" max="200" value="100" oninput="setDriverScale(this.value)" />
+        <span id="drvScaleVal" class="muted" style="min-width:36px">100%</span>
+      </div>
+      <div class="muted" id="drvHint"></div>
+    </div>
+
+    <h3>Arquivos</h3>
+    <button onclick="llgApp.openPath('config')" title="Cores de classe, logos, tabela de pontos (drivers-config.js)">Abrir pasta de configuração</button>
+    <button onclick="llgApp.openPath('data')" title="Configurações salvas e registros do listener e dos atalhos">Abrir pasta de dados e registros</button>
+  </div>
 
   <h3>Overlay</h3>
   <button onclick="send('overlay.prevPage')">Página ← [</button>
@@ -39,29 +118,22 @@
       <span id="opRowsVal" class="muted" style="min-width:36px">100%</span>
     </div>
     <div class="row">
+      <label style="min-width:140px" title="Troca sozinho entre as posições da sessão e a pontuação do campeonato, na tabela e no driver card. Só funciona com temporada aplicada."><input id="altEnabled" type="checkbox" style="width:auto" onchange="setAlternate()" /> Alternar posições e pontuação</label>
+    </div>
+    <div class="row">
+      <label class="muted" style="min-width:140px">Tempo em cada tela</label>
+      <input id="altSeconds" type="range" min="5" max="120" step="5" value="20" oninput="showAlternateSeconds(this.value)" onchange="setAlternate()" />
+      <span id="altSecondsVal" class="muted" style="min-width:36px">20 s</span>
+    </div>
+    <div class="row">
       <label class="muted" style="min-width:140px" title="Degradê com a cor principal da equipe (RLT) em cada linha da tabela. 0% desliga.">Cor da equipe</label>
       <input id="teamTint" type="range" min="0" max="100" value="50" oninput="setTeamTint(this.value)" />
       <span id="teamTintVal" class="muted" style="min-width:36px">50%</span>
     </div>
   </div>
 
-  <h3>Racing League Tools</h3>
+  <h3>Logos</h3>
   <div class="box">
-    <div class="muted">API key (header X-API-Key) — <a href="https://racingleaguetools.com/api/docs/" target="_blank" style="color:#6cf">docs</a></div>
-    <div class="row">
-      <input id="rltKey" type="password" placeholder="Cole a API key" />
-      <button onclick="saveKey()">Salvar key</button>
-      <button onclick="clearRlt()">Limpar</button>
-    </div>
-    <div class="row">
-      <select id="rltSeason"><option value="">— só dados do jogo (sem season) —</option></select>
-      <button onclick="applySeason()">Aplicar</button>
-      <button onclick="reloadSeasons()">Recarregar</button>
-    </div>
-    <div id="rltClasses"></div>
-    <div class="muted" id="rltStatus"></div>
-    <div id="rltLog"></div>
-    <h3 style="margin-top:16px">Logos (GitHub)</h3>
     <div class="muted">Repo com pastas teams/ e cars/. Aceita link do GitHub ou raw. A overlay busca primeiro aqui e usa a pasta local como reserva. Vazio = só pasta local.</div>
     <div class="row">
       <input id="assetsBaseUrl" type="text" placeholder="https://github.com/user/repo ou .../tree/main/assets" />
@@ -70,15 +142,21 @@
     </div>
     <div class="muted" id="assetsBaseStatus"></div>
     <h3 style="margin-top:16px">Logos de equipe</h3>
-    <div class="muted">Arquivo em teams/ (ex: minha_equipe.png). Vazio = padrão (slug). Fallback: cars/.</div>
+    <div class="muted">Escolha a equipe e informe o arquivo em teams/ (ex: minha_equipe.png). Vazio = padrão (slug). Fallback: cars/.</div>
     <div id="teamLogos"></div>
   </div>
 
-  <h3>OBS</h3>
-  <button onclick="send('obs.setScene', { scene: 'Corrida' })">Cena: Corrida</button>
-  <button onclick="send('obs.setScene', { scene: 'Boxes' })">Cena: Boxes</button>
-  <button onclick="send('obs.startRecord')">Iniciar gravacao</button>
-  <button onclick="send('obs.stopRecord')">Parar gravacao</button>
+  <h3>Assetto Corsa 1</h3>
+  <div class="box">
+    <div class="muted"><b>Somente para o Assetto Corsa 1.</b> Automobilista 2, Le Mans Ultimate e Assetto Corsa Competizione não precisam disto. O Assetto Corsa 1 só informa todos os carros a apps que rodam dentro do jogo, então a overlay precisa instalar um app pequeno, sem janela, na pasta dele. O botão copia a pasta LLGOverlay para apps\python do jogo e ativa o app no python.ini.</div>
+    <div class="row">
+      <button id="acInstallBtn" onclick="installAcApp()">Instalar no Assetto Corsa 1</button>
+    </div>
+    <div class="muted" id="acInstallStatus"></div>
+  </div>
+
+  <h3>Registro</h3>
+  <div id="rltLog"></div>
 
   <script src="panel.js"></script>
 </body>
