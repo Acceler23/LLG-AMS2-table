@@ -125,4 +125,4 @@ async function installAcApp(options) {
   }
 }
 
-module.exports = { installAcApp, parseLibraryFolders, enableInIni, copyApp, findGameDir };
+module.exports = { installAcApp, parseLibraryFolders, enableInIni, copyApp, findGameDir, findSteamLibraries };

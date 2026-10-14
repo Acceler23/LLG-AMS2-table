@@ -118,6 +118,34 @@ O que muda no ACC:
 - **Não existe no ACC**: abandono (DNF), safety car e a linha de "causou bandeira".
 - As corridas são por tempo, então o cabeçalho mostra o relógio e não voltas.
 
+## Carsets do Automobilista 2
+
+Na aba AMS2 do painel dá para baixar e instalar o carset (pinturas) de uma
+temporada. A lista vem do arquivo `AMS2_CarsetList.json` do repositório de
+imagens, com o nome da temporada e o link do arquivo no Google Drive:
+
+```json
+[{ "Season": "Porsche Cup - Temporada 4", "CarSet": "https://drive.google.com/file/d/.../view" }]
+```
+
+O arquivo pode ser `.zip`, `.rar` ou `.7z` (é aberto pelo extrator do próprio
+Windows) e precisa ter uma pasta por carro, com o mesmo nome que o carro tem em
+`<Automobilista 2>VehiclesTexturesCustomLiveriesOverrides`, na pasta do
+jogo na Steam. Pode vir dentro de uma pasta com o nome do carset. Só as pastas
+dos carros do carset são alteradas, e o jogo precisa estar fechado.
+
+Modos de instalação:
+- **Trocar as pinturas desses carros** (padrão): o que havia na pasta de cada
+  carro do carset ganha `_old_` no início do nome (`lets_go` vira
+  `_old_lets_go`) e o jogo deixa de usar; depois o carset é copiado. Nada é
+  apagado, com uma exceção: se já existir um `_old_` com o mesmo nome, de uma
+  instalação anterior, ele dá lugar ao novo.
+- **Não mexer nas antigas**: copia por cima; arquivo de mesmo nome é substituído.
+- **Só atualizar os arquivos que já existem com o mesmo nome**: não acrescenta
+  nem renomeia nada.
+
+Em nenhum modo o `<carro>_dist.xml` é substituído: ele é do próprio jogo.
+
 ## Assetto Corsa (o primeiro)
 
 O Assetto Corsa só mostra para programas de fora os dados do carro do jogador.
@@ -182,6 +210,21 @@ O comando lê `RLT_API_KEY` do seu `.env` e mostra a chave criptografada
 fica em `server/rlt-key.enc`, que está fora do git e não entra no aplicativo.
 Quem tem o aplicativo e a chave criptografada consegue, com algum trabalho,
 chegar à chave do RLT, então só passe para quem pode tê-la.
+
+**Publicar uma versão pelo GitHub.** O arquivo `.github/workflows/release.yml`
+faz o GitHub montar o aplicativo e criar um Release com o zip para download.
+Para disparar, crie uma tag de versão:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+Ou, pelo site, vá em Actions > Release > Run workflow e informe a versão. Antes
+de montar, ele confere a sintaxe dos arquivos `.js` e roda os testes; se algo
+falhar, nenhum Release é criado. O download fica em
+`https://github.com/<usuário>/<repositório>/releases/latest`. Num repositório
+privado, só quem tem acesso a ele consegue baixar.
 
 O aplicativo faz sozinho o que o `start.bat` faz em três janelas:
 - sobe o servidor e inicia o listener e os atalhos, escondidos;
@@ -297,6 +340,13 @@ navegador (F12 → Console) na página da tabela e digite
 `overlay/assets/` como reserva quando o arquivo não existe online ou não há
 internet. O painel de controle troca a fonte online sem reiniciar.
 
+**Variantes de logo**: na página de disputas a linha fica na cor da equipe, e
+um logo da mesma cor some. Para esses casos, suba uma variante com o mesmo nome
+e o sufixo `__light` ou `__dark` antes da extensão, em `teams/` ou `cars/`:
+`apex.png` → `apex__light.png` (logo **claro**, usado em fundo escuro) e
+`apex__dark.png` (logo **escuro**, usado em fundo claro). Quando a variante não
+existe, vale o logo normal.
+
 **Relógio da volta mais rápida**: em corrida, o ícone `clock.png` aparece ao
 lado da tabela, na altura da linha do piloto com a melhor volta. Na página
 Geral é a melhor volta da corrida; nas páginas por classe há um relógio por
@@ -314,12 +364,19 @@ para página, coluna e destaque.
 - `[` e `]` trocam a página: **Geral**, **Multiclasse** e a classe do piloto em foco.
 - `p` liga/desliga o destaque do piloto em foco (o jogo não diferencia pilotar de espectar, só qual carro a câmera está olhando).
 - `0` alterna entre a tabela de tempos e a tela de **pontuação** do campeonato (colunas: Pts / Pts proj. / Gap líder).
+- `9` liga e desliga a página de **disputas**, só em corrida: os carros que
+  ficam pelo menos 10 s com menos de 0,3 s de intervalo para o da frente são
+  destacados (e deixam de ser depois de 5 s fora disso), a velocidade deles
+  aparece ao lado da tabela, e a parte da tabela que fica rodando trava onde
+  houver disputa. Ela desliga sozinha ao fim da corrida e quando o safety car
+  entra. No painel dá para escolher entre a tabela toda (0,3 s) e só as
+  disputas do piloto assistido (com 0,5 s).
 
-**Alternância automática**: no painel, "Alternar posições e pontuação" faz a
-tabela e o driver card trocarem sozinhos entre as posições da sessão e a
-pontuação do campeonato, ficando em cada tela o tempo escolhido no slider
-(5 a 120 s). A escolha fica salva. A pontuação só aparece com temporada do RLT
-aplicada: sem temporada, a tecla `0` e a alternância não fazem nada.
+**Alternância automática**: no painel, "Alternar colunas sozinho" faz a tabela
+passar sozinha pelas colunas da direita (Intervalo, Gap líder, Última volta...),
+como a tecla `.`, no intervalo escolhido em "Tempo em cada coluna". Na tela de
+pontuação ela passa pelas colunas da pontuação. A troca entre posições e
+pontuação continua manual, pela tecla `0`, e só existe com temporada aplicada.
 
 ## O que cada coluna mostra
 

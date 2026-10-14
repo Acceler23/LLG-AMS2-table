@@ -45,48 +45,175 @@ html, body {
   background-color: #c49a00;
 }
 
+/* ---- cabecalho, no estilo do GT World Challenge, nos tons de azul da tabela ----
+   Linha 1: faixa com o campeonato | sessao. A pista fica numa etiqueta fora
+   da tabela, a direita (#trackTag).
+   Linha 2: relogio, pagina e titulo da coluna da direita.
+   As duas somam 94 px (62 + 32): sao o TITLE_H e o COL_HEADER_H de
+   timing-table.js. Se mudar aqui, mude la. */
 .title-bar {
-  background-color: #0a2d52;
-  padding: 8px 16px;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  min-height: 48px;
-  height: auto;
+  align-items: stretch;
+  height: 62px;
   box-sizing: border-box;
-  gap: 12px;
+  padding: 0;
+  background-color: #0a2d52;
 }
 
-.title-text {
-  font-size: 28px;
-  font-weight: 800;
-  letter-spacing: 1px;
+.tb-brand,
+.tb-track {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
   line-height: 1.1;
-  flex-shrink: 0;
+  text-transform: uppercase;
 }
 
-.title-timer {
-  font-size: 26px;
+.tb-brand {
+  flex: 1 1 auto;
+  padding: 0 10px 0 14px;
+  background-color: var(--header-color, #0b5ed7);
+  color: #fff;
+}
+
+.tb-line1 {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tb-line2 {
+  margin-top: 3px;
+  font-size: 15px;
   font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  opacity: 0.95;
-  line-height: 1.15;
-  text-align: right;
-  white-space: normal;
-  max-width: 65%;
-  overflow-wrap: anywhere;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tb-country.empty,
+.tb-line2:empty {
+  display: none;
+}
+
+.tb-session {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  /* mesma cor da faixa do campeonato, com um fio separando os dois */
+  background-color: var(--header-color, #0b5ed7);
+  border-left: 2px solid rgba(255, 255, 255, 0.35);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+/* pista: etiqueta FORA da tabela, a direita, na altura da primeira linha do
+   cabecalho. Posicionada por updateTrackTag() em timing-table.js. */
+#trackTag {
+  position: absolute;
+  box-sizing: border-box;
+  height: 64px; /* 62 da linha + a borda de cima da tabela */
+  min-width: 200px;
+  max-width: 360px;
+  padding: 0 18px 0 14px;
+  background-color: #0a2d52;
+  color: #fff;
+  border: 2px solid #00c5fd;
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  pointer-events: none;
+}
+
+#trackTag .tb-line1 {
+  font-size: 21px;
+}
+
+#trackTag .tb-line2 {
+  opacity: 0.8;
+}
+
+/* segunda linha da etiqueta: bandeira e pais (ou o tracado) */
+.tb-country {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* As bandeiras do repositorio sao quadradas, com uma faixa transparente em
+   cima e embaixo. A caixa 3:2 com object-fit: cover corta essas faixas e
+   mostra so a bandeira. */
+.tb-flag {
+  flex: 0 0 auto;
+  width: 27px;
+  height: 18px;
+  object-fit: cover;
+  border-radius: 2px;
+}
+
+#trackTag.no-track {
+  display: none;
 }
 
 .header {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 16px;
+  align-items: stretch;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 16px 0 0;
   font-size: 14px;
   font-weight: 700;
   color: #fff;
   letter-spacing: 0.5px;
   background-color: #0a2d52;
+}
+
+.header .col {
+  display: flex;
+  align-items: center;
+}
+
+.header .right {
+  margin-left: auto;
+}
+
+/* nome da pagina (Geral, Multiclasse...), ao lado do relogio */
+#timing-table .header .pos {
+  font-size: 15px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.tb-timer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 84px;
+  margin-right: 12px;
+  padding: 0 10px;
+  background-color: #061d38;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tb-timer:empty {
+  display: none;
+}
+
+.tb-timer:empty + .pos {
+  padding-left: 16px;
 }
 
 .header .pos {
@@ -209,6 +336,22 @@ html, body {
 
 .pos-gain.pos-down {
   color: #ff5a5a;
+}
+
+/* ACC: cronometro do stint. Numeros de largura fixa para nao tremer ao contar. */
+.right-value.stint-clock {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ACC: tempo de stint perto do limite (amarelo) e estourado (vermelho) */
+.right-value.stint-warn {
+  color: #ffd21f;
+  font-weight: 700;
+}
+
+.right-value.stint-over {
+  color: #ff5a5a;
+  font-weight: 800;
 }
 
 .right-value.pos-up {
@@ -417,6 +560,16 @@ html, body {
   pointer-events: none;
 }
 
+/* pagina de disputas: so o pneu, sem a VE (a velocidade vem logo depois) */
+.lmu-side.tyre-only {
+  width: 30px; /* igual a LMU_TYRE_ONLY_WIDTH em timing-table.js */
+  grid-template-columns: 30px;
+}
+
+.lmu-side.tyre-only .energy {
+  display: none;
+}
+
 .lmu-side.visible {
   visibility: visible;
 }
@@ -452,15 +605,6 @@ html, body {
 .lmu-side .energy.mid { color: #ffd21f; }
 .lmu-side .energy.low { color: #ff5a5a; }
 
-/* titulos "Pneu" e "VE", na altura do cabecalho da tabela */
-.lmu-side.head {
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.lmu-side.head .energy {
-  font-size: 10px;
-}
 
 /* ?clock=left no LMU: abre espaco a esquerda para pneus/VE + relogio */
 #timing-table.clock-left.game-lmu {
@@ -546,3 +690,62 @@ html, body {
 .tyre-cell.hard { background: #ff3b3b; }
 .tyre-cell.wet { background: #3d9bff; }
 .tyre-cell.inter { background: #37c871; }
+
+/* ---- pagina de disputas (tecla 9, so em corrida) ----
+   Carros em disputa: a linha inteira na cor da equipe, como no WEC. As
+   cores vem de --battle-bg e --battle-fg, definidas em timing-table.js.
+   As outras linhas ficam como sempre. */
+#timing-table .row.battle {
+  background-color: var(--battle-bg, #ff9d1e) !important;
+  background-image: none !important;
+  color: var(--battle-fg, #000);
+  font-weight: 700;
+}
+
+#timing-table .row.battle .name,
+#timing-table .row.battle .right-value {
+  color: inherit;
+}
+
+/* velocidade do carro em disputa, FORA da tabela, ao lado da linha dele,
+   com o mesmo fundo e a mesma borda das linhas da tabela.
+   Criada por updateBattleSide() em timing-table.js. */
+.battle-side {
+  position: absolute;
+  box-sizing: border-box;
+  width: 66px; /* igual a BATTLE_SIDE_WIDTH em timing-table.js */
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  padding: 0 6px;
+  font-size: 18px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: rgb(14, 66, 165);
+  border-top: 3px solid #3a5a8c;
+  border-radius: 0 0 5px 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.battle-side small {
+  font-size: 9px;
+  font-weight: 700;
+  opacity: 0.7;
+}
+
+.battle-side.visible {
+  visibility: visible;
+}
+
+/* ?clock=left: a velocidade tambem vai para a esquerda, entao a tabela anda
+   mais para a direita para caber (relogio + velocidade, e pneus/VE no LMU) */
+#timing-table.clock-left.battle-has {
+  left: 70px;
+}
+
+#timing-table.clock-left.game-lmu.battle-has {
+  left: 102px;
+}

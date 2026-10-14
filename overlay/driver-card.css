@@ -157,3 +157,136 @@ html, body {
   opacity: 0.55;
   margin-top: 2px;
 }
+
+/* classificacao: parciais S1, S2 e S3 no estilo do WEC. Em cima o nome da
+   parcial e uma barra, os dois na cor da parcial: roxo melhor da classe,
+   verde melhor do piloto, amarelo pior, vermelho volta invalidada, cinza
+   ainda nao fechada. Embaixo, o tempo da parcial e a diferenca para o lider. */
+.stat.sector {
+  --sector: rgba(255, 255, 255, 0.28);
+  padding: 5px 10px 5px;
+}
+
+.stat.sector .l {
+  color: var(--sector);
+  opacity: 1;
+  margin-top: 0;
+  font-size: 15px;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 1px;
+  line-height: 1;
+}
+
+.stat.sector .bar {
+  height: 6px;
+  margin: 3px -2px 4px;
+  border-radius: 3px;
+  background: var(--sector);
+}
+
+/* tempo da parcial e, ao lado, a diferenca para o lider da classe */
+.stat.sector .t {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 7px;
+  min-height: 19px;
+  white-space: nowrap;
+}
+
+.stat.sector .v {
+  font-size: 16px;
+}
+
+.stat.sector .d {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.stat.sector.purple { --sector: #c44dff; }
+.stat.sector.green { --sector: #2fe06a; }
+.stat.sector.yellow { --sector: #ffd21f; }
+.stat.sector.red { --sector: #ff3b3b; }
+
+/* ---- pagina de disputas: barra dos pedais, marcha e velocidade ----
+   Uma barra so: o acelerador (verde) enche da esquerda para a direita e o
+   freio (vermelho) da direita para a esquerda. */
+.stats.pedals {
+  grid-template-columns: 1fr 74px 84px;
+}
+
+.pedal-bar {
+  position: relative;
+  margin: 9px 12px;
+  min-height: 28px;
+  border-radius: 6px;
+  background: #061d38;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.25);
+  overflow: hidden;
+}
+
+.stats.pedals > * {
+  background-color: #0a2d52;
+}
+
+.stats.pedals > .pedal-bar {
+  background-color: #061d38;
+  outline: 9px solid #0a2d52; /* a margem em volta da barra fica na cor do card */
+}
+
+.pedal-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  transition: width 0.1s linear;
+}
+
+.pedal-fill.throttle {
+  left: 0;
+  background: linear-gradient(#3fe06f, #1fa84a);
+}
+
+.pedal-fill.brake {
+  right: 0;
+  background: linear-gradient(#ff5a4d, #d32a22);
+}
+
+.pedal-label {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  font-weight: 800;
+  font-style: italic;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+}
+
+.pedal-label.left { left: 10px; }
+.pedal-label.right { right: 10px; }
+
+.pedal-box {
+  padding: 6px 8px;
+  text-align: center;
+}
+
+.pedal-box .v {
+  font-size: 20px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.pedal-box .l {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.55;
+}

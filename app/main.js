@@ -7,7 +7,7 @@
 // Rodar em desenvolvimento: npm run app. Gerar a pasta com o .exe: npm run build.
 
 const { app, BrowserWindow, Menu, dialog, ipcMain, screen, shell } = require("electron");
-const { spawn } = require("child_process");
+const { spawn, execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
@@ -31,12 +31,20 @@ const helpers = []; // { name, child }
 // ---------------------------------------------------------------- estado
 const dataDir = app.getPath("userData");
 const stateFile = path.join(dataDir, "app-state.json");
-let state = { driver: { visible: false, edit: false, scale: 1, x: null, y: null } };
+let state = {
+  driver: { visible: false, edit: false, scale: 1, x: null, y: null },
+  // programas que o usuario escolheu no painel para abrir junto com o aplicativo
+  companion: { paths: [] },
+};
 
 function loadState() {
   try {
     const saved = JSON.parse(fs.readFileSync(stateFile, "utf8"));
     state.driver = Object.assign(state.driver, saved.driver || {});
+    const c = saved.companion || {};
+    // versao anterior guardava um programa so, em "path"
+    const list = Array.isArray(c.paths) ? c.paths : c.path ? [c.path] : [];
+    state.companion.paths = list.filter((f) => typeof f === "string" && f);
   } catch (_) {}
   state.driver.edit = false; // sempre abre travada
 }
@@ -99,6 +107,7 @@ function createPanelWindow() {
     width: 880,
     height: 960,
     title: "LLG Overlay",
+    icon: path.join(__dirname, "icon.png"), // gerado por app/make-icon.ps1
     autoHideMenuBar: true,
     backgroundColor: "#111111",
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true },
@@ -226,6 +235,88 @@ ipcMain.handle("app:info", () => ({
   configFile: path.join(ROOT, "overlay", "drivers-config.js"),
   noHotkeys: !!process.env.LLG_NO_HOTKEYS,
 }));
+// ---------------------------------------------------------------- programas abertos junto
+// O usuario monta no painel (aba Configuracao) uma lista de outros programas
+// para abrir sempre que este aplicativo abrir: o OBS, por exemplo. So entram
+// na lista arquivos que ele mesmo escolheu pela janela de selecao; nada e
+// aberto sem essa escolha.
+const COMPANION_TYPES = [".exe", ".bat", ".cmd", ".lnk"];
+
+// messages: { caminho: texto } para mostrar ao lado de um item; note: aviso geral
+function companionInfo(messages, note) {
+  const msgs = messages || {};
+  return {
+    items: state.companion.paths.map((file) => ({ path: file, exists: fs.existsSync(file), message: msgs[file] || "" })),
+    note: note || "",
+  };
+}
+
+function isRunning(file) {
+  // so da para conferir programas .exe, pelo nome do arquivo
+  return new Promise((resolve) => {
+    if (path.extname(file).toLowerCase() !== ".exe") return resolve(false);
+    const image = path.basename(file);
+    execFile("tasklist", ["/FI", `IMAGENAME eq ${image}`, "/NH", "/FO", "CSV"], { windowsHide: true, timeout: 8000 }, (err, stdout) => {
+      resolve(!err && String(stdout || "").toLowerCase().includes(`"${image.toLowerCase()}"`));
+    });
+  });
+}
+
+// onlyIfClosed: na abertura do aplicativo, nao abre de novo o que ja esta aberto.
+// Devolve o texto do que aconteceu.
+async function launchOne(file, onlyIfClosed) {
+  if (!fs.existsSync(file)) return "Arquivo não encontrado. Remova e adicione de novo.";
+  if (onlyIfClosed && (await isRunning(file))) return "Já estava aberto.";
+  const error = await shell.openPath(file);
+  return error ? `Não foi possível abrir: ${error}` : "Aberto.";
+}
+
+async function launchCompanions(onlyIfClosed) {
+  const messages = {};
+  for (const file of state.companion.paths.slice()) messages[file] = await launchOne(file, onlyIfClosed);
+  return companionInfo(messages);
+}
+
+ipcMain.handle("companion:get", () => companionInfo());
+ipcMain.handle("companion:add", async () => {
+  const result = await dialog.showOpenDialog(panelWin, {
+    title: "Programa para abrir junto com o LLG Overlay",
+    properties: ["openFile", "multiSelections"],
+    filters: [{ name: "Programas", extensions: COMPANION_TYPES.map((e) => e.slice(1)) }],
+  });
+  if (result.canceled || !result.filePaths.length) return companionInfo();
+  const have = new Set(state.companion.paths.map((f) => f.toLowerCase()));
+  let added = 0;
+  let skipped = 0;
+  result.filePaths.forEach((file) => {
+    if (!COMPANION_TYPES.includes(path.extname(file).toLowerCase()) || have.has(file.toLowerCase())) {
+      skipped++;
+      return;
+    }
+    have.add(file.toLowerCase());
+    state.companion.paths.push(file);
+    added++;
+  });
+  saveState();
+  const note = added
+    ? `${added === 1 ? "Programa adicionado" : added + " programas adicionados"}. ${added === 1 ? "Vai" : "Vão"} abrir junto na próxima vez que o aplicativo abrir.`
+    : skipped
+      ? "Nada adicionado: o programa já está na lista ou não é .exe, .bat, .cmd ou atalho .lnk."
+      : "";
+  return companionInfo(null, note);
+});
+ipcMain.handle("companion:remove", (_event, file) => {
+  state.companion.paths = state.companion.paths.filter((f) => f !== file);
+  saveState();
+  return companionInfo(null, "Removido da lista.");
+});
+ipcMain.handle("companion:launch", async (_event, file) => {
+  // so abre o que esta na lista
+  if (!state.companion.paths.includes(file)) return companionInfo();
+  return companionInfo({ [file]: await launchOne(file, false) });
+});
+ipcMain.handle("companion:launchAll", () => launchCompanions(false));
+
 ipcMain.handle("app:openPath", (_event, target) => {
   // so abre as duas pastas que o painel oferece
   if (target === "data") return shell.openPath(dataDir);
@@ -279,6 +370,8 @@ if (!app.requestSingleInstanceLock()) {
 
     createPanelWindow();
     syncDriverWindow();
+    // abre junto os programas escolhidos no painel, se houver
+    launchCompanions(true).catch(() => {});
   });
 
   app.on("before-quit", () => {

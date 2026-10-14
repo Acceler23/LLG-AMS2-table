@@ -20,7 +20,8 @@ const settings = require("./settings");
 const lmuFocus = require("./lmuFocus");
 const { startAccClient } = require("./accClient");
 const { startAcClient } = require("./acClient");
-const { installAcApp } = require("./acInstaller");
+const { installAcApp, findSteamLibraries } = require("./acInstaller");
+const carsets = require("./carsets");
 const secret = require("./secret");
 
 // Chave do RLT: a do .env tem prioridade; senao, a ultima salva pelo painel.
@@ -110,35 +111,44 @@ function resetRace() {
 }
 wss.onCommand("race.reset", resetRace);
 
-// Alternancia automatica entre as posicoes da sessao e a pontuacao do
-// campeonato. Fica no servidor para a tabela e o driver card trocarem juntos.
-// So alterna com temporada do RLT aplicada (sem ela nao existe pontuacao).
+// Alternancia automatica das colunas: a cada intervalo o servidor manda o
+// mesmo comando da tecla "." (proxima coluna), entao a coluna da direita da
+// tabela vai rodando sozinha (Intervalo, Gap lider, Ultima volta...). Na tela
+// de pontuacao (tecla 0) roda as colunas dela.
 const ALTERNATE_MIN_S = 5;
 const ALTERNATE_MAX_S = 300;
 const alternate = {
   enabled: !!settings.get("alternateEnabled"),
   seconds: Math.max(ALTERNATE_MIN_S, Math.min(ALTERNATE_MAX_S, Number(settings.get("alternateSeconds")) || 20)),
 };
-let showStandings = false;
 let alternateTimer = null;
-
-function broadcastStandingsView() {
-  wss.broadcast({ type: "overlayCommand", name: "overlay.setStandings", payload: { value: showStandings } });
-}
 
 function restartAlternate() {
   clearInterval(alternateTimer);
   alternateTimer = null;
-  if (!alternate.enabled) {
-    showStandings = false;
-    broadcastStandingsView(); // volta para as posicoes
-    return;
-  }
+  if (!alternate.enabled) return;
   alternateTimer = setInterval(() => {
-    showStandings = rlt.getOverlayPayload() ? !showStandings : false;
-    broadcastStandingsView();
+    wss.broadcast({ type: "overlayCommand", name: "overlay.nextColumn", payload: {} });
   }, alternate.seconds * 1000);
 }
+
+// Assetto Corsa Competizione: tempo maximo de stint, em minutos (0 = a liga
+// nao usa). O jogo nao informa o limite nem o tempo de stint dos carros, entao
+// o limite e digitado no painel (aba ACC) e o tempo e contado pelo servidor
+// (server/raceState.js). O limite vai junto com os dados do ACC para a tabela.
+const STINT_MAX_MIN = 600;
+let accStintLimitMin = Math.max(0, Math.min(STINT_MAX_MIN, Math.floor(Number(settings.get("accStintLimitMin")) || 0)));
+
+app.get("/api/acc/stint", (req, res) => {
+  res.json({ ok: true, minutes: accStintLimitMin });
+});
+
+app.post("/api/acc/stint", (req, res) => {
+  const minutes = Math.floor(Number(req.body && req.body.minutes));
+  accStintLimitMin = Number.isFinite(minutes) ? Math.max(0, Math.min(STINT_MAX_MIN, minutes)) : 0;
+  settings.set("accStintLimitMin", accStintLimitMin || null);
+  res.json({ ok: true, minutes: accStintLimitMin });
+});
 
 app.get("/api/overlay/alternate", (req, res) => {
   res.json({ ok: true, enabled: alternate.enabled, seconds: alternate.seconds });
@@ -191,10 +201,6 @@ wss.onConnect((socket) => {
   if (socket.readyState === 1) {
     socket.send(JSON.stringify({ type: "assetsConfig", data: assetsConfigPayload() }));
   }
-  // overlay recem-aberta entra na mesma tela que as outras estao mostrando
-  if (alternate.enabled && socket.readyState === 1) {
-    socket.send(JSON.stringify({ type: "overlayCommand", name: "overlay.setStandings", payload: { value: showStandings } }));
-  }
 });
 
 app.post("/api/overlay/alternate", (req, res) => {
@@ -220,6 +226,67 @@ app.post("/api/ac/install", async (req, res) => {
     return res.status(r.reason === "sem-jogo" ? 404 : 500).json({ ok: false, error });
   }
   res.json({ ok: true, gameDir: r.gameDir, copied: r.copied, enabled: r.enabled, active: r.active });
+});
+
+// ---- Automobilista 2: carsets (pinturas) ----
+// A lista vem do repositorio de imagens (AMS2_CarsetList.json: temporada e
+// link do arquivo). A instalacao so acontece quando alguem clica no botao do
+// painel, e so mexe nas pastas dos carros do carset, dentro da pasta de
+// pinturas do jogo na Steam (server/carsets.js).
+async function findAms2Dir() {
+  for (const lib of await findSteamLibraries()) {
+    const dir = path.join(lib, "steamapps", "common", "Automobilista 2");
+    if (fs.existsSync(carsets.overridesDir(dir))) return dir;
+  }
+  return null;
+}
+
+async function fetchCarsetList() {
+  if (!assetsBaseUrl) throw new Error("Defina o repositorio de imagens no painel (aba Transmissao > Logos).");
+  const res = await fetch(`${assetsBaseUrl}/${carsets.LIST_FILE}?v=${Date.now()}`);
+  if (!res.ok) throw new Error(`Nao foi possivel ler a lista de carsets (HTTP ${res.status}).`);
+  return carsets.parseList(await res.json());
+}
+
+app.get("/api/carsets", async (req, res) => {
+  try {
+    const [list, gameDir, gameRunning] = await Promise.all([fetchCarsetList(), findAms2Dir(), carsets.isGameRunning()]);
+    res.json({
+      ok: true,
+      seasons: list.map((item) => item.season), // os links ficam no servidor
+      gameDir,
+      gameRunning,
+      status: carsets.status(),
+    });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+app.get("/api/carsets/status", (req, res) => {
+  res.json({ ok: true, status: carsets.status() });
+});
+
+app.post("/api/carsets/install", async (req, res) => {
+  try {
+    const season = String((req.body && req.body.season) || "");
+    const mode = String((req.body && req.body.mode) || "");
+    if (!carsets.MODES.includes(mode)) return res.status(400).json({ ok: false, error: "Modo de instalacao desconhecido." });
+    if (carsets.status().running) return res.status(409).json({ ok: false, error: "Ja ha uma instalacao em andamento." });
+    // o link e sempre o da lista: o painel so diz qual temporada
+    const item = (await fetchCarsetList()).find((x) => x.season === season);
+    if (!item) return res.status(404).json({ ok: false, error: "Temporada sem carset na lista." });
+    const gameDir = await findAms2Dir();
+    if (!gameDir) return res.status(404).json({ ok: false, error: "Automobilista 2 nao encontrado nas bibliotecas da Steam." });
+    // a instalacao segue em segundo plano; o painel acompanha por /api/carsets/status
+    carsets.install({ link: item.link, season, mode, gameDir }).then(
+      (r) => console.log(`Carset "${season}" instalado (${mode}): ${r.cars.map((c) => c.car).join(", ")}`),
+      (err) => console.log(`Carset "${season}": ${err.message}`)
+    );
+    res.json({ ok: true, gameDir });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err.message });
+  }
 });
 
 app.post("/command", (req, res) => {
@@ -457,6 +524,8 @@ function handleGamePayload(payload) {
   // LMU: o carro em foco vem da API do jogo (funciona tambem como espectador)
   if (payload.game === "lmu") lmuFocus.apply(payload);
   const data = raceState.apply(payload);
+  // ACC: limite de stint escolhido no painel (0 = sem limite)
+  if (data && data.game === "acc" && data.session) data.session.stintLimitMin = accStintLimitMin;
   wss.broadcast({ type: "standings", data });
 }
 

@@ -82,9 +82,9 @@ public class KbHook {
       if (vk != _lastVk || (now - _lastTick) > 200) {
         _lastVk = vk;
         _lastTick = now;
-        // enfileira o caractere: , . [ ] P 0 (o 0 do teclado numerico tambem vale)
-        char c = vk == 0x60 ? '0' : KeyChar((uint)vk);
-        if (c == ',' || c == '.' || c == '[' || c == ']' || c == 'P' || c == '0')
+        // enfileira o caractere: , . [ ] P 0 9 (o 0 e o 9 do teclado numerico tambem valem)
+        char c = vk == 0x60 ? '0' : vk == 0x69 ? '9' : KeyChar((uint)vk);
+        if (c == ',' || c == '.' || c == '[' || c == ']' || c == 'P' || c == '0' || c == '9')
           Queue.Enqueue((int)c);
       }
     }
@@ -131,7 +131,7 @@ function Send-Cmd([string]$name) {
 
 try {
   [KbHook]::Start()
-  Write-Host "Hook OK. Teclas: , . [ ] P 0"
+  Write-Host "Hook OK. Teclas: , . [ ] P 0 9"
   Write-Host "Se o jogo for Admin, rode este script como Admin."
   Write-Host "Feche a janela para sair."
 
@@ -156,6 +156,7 @@ try {
         93 { if (Send-Cmd "overlay.nextPage") { Write-Host "[]] pagina +" } }
         80 { if (Send-Cmd "overlay.toggleHighlight") { Write-Host "[P] destaque" } }
         48 { if (Send-Cmd "overlay.toggleStandings") { Write-Host "[0] standings" } }
+        57 { if (Send-Cmd "overlay.toggleBattles") { Write-Host "[9] disputas" } }
       }
     }
   })

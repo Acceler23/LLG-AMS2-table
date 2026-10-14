@@ -14,6 +14,13 @@
     .class-chip { display: inline-block; padding: 4px 10px; margin: 4px 4px 0 0; border-radius: 4px; font-size: 12px; font-weight: 700; }
     #rltLog { font-family: monospace; font-size: 12px; color: #9f9; white-space: pre-wrap; max-height: 180px; overflow: auto; background: #0a0a0a; padding: 8px; border-radius: 4px; }
     .muted { color: #888; font-size: 12px; }
+    .row.wrap { flex-wrap: wrap; gap: 0; margin: 4px 0; }
+    .sub { margin-top: 16px; color: #aaa; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 24px; border-bottom: 2px solid #333; }
+    .tab { margin: 0; padding: 10px 13px; background: #1a1a1a; color: #aaa; border: 1px solid #333; border-bottom: none; border-radius: 8px 8px 0 0; font-weight: 700; }
+    .tab.active { background: #0b5ed7; color: #fff; border-color: #0b5ed7; }
+    .tab-page { display: none; padding-top: 12px; }
+    .tab-page.active { display: block; }
     #firstRun { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.85); align-items: center; justify-content: center; padding: 16px; }
     .first-run-card { background: #1a1a1a; border: 1px solid #444; border-radius: 8px; padding: 20px; max-width: 460px; width: 100%; }
   </style>
@@ -38,125 +45,253 @@
     </div>
   </div>
 
-  <h3>Temporada (Racing League Tools)</h3>
+  <!-- vale para todos: a temporada define equipes, classes e pontuacao -->
+  <h3>Temporada</h3>
   <div class="box">
     <div class="row">
-      <select id="rltSeason"><option value="">— só dados do jogo (sem season) —</option></select>
+      <select id="rltSeason"><option value="">— só dados do jogo (sem temporada) —</option></select>
       <button onclick="applySeason()">Aplicar</button>
-      <button onclick="reloadSeasons()">Recarregar</button>
+      <button onclick="reloadSeasons()" title="Busca de novo a lista de temporadas no Racing League Tools">Recarregar</button>
     </div>
     <div id="rltClasses"></div>
-    <div class="muted" style="margin-top:10px">API key (header X-API-Key) — <a href="https://racingleaguetools.com/api/docs/" target="_blank" style="color:#6cf">docs</a></div>
-    <div class="row">
-      <input id="rltKey" type="password" placeholder="Cole a chave" />
-      <button onclick="saveKey()">Salvar key</button>
-      <button onclick="clearRlt()">Limpar</button>
-    </div>
-    <div class="muted" id="rltStatus"></div>
   </div>
 
-  <h3>Links das overlays</h3>
-  <div class="box">
-    <div class="muted">No OBS: adicione uma Fonte de Navegador e cole o link. O fundo já é transparente.</div>
-    <div class="row">
-      <label class="muted" style="min-width:140px">Tabela (transmissão)</label>
-      <input id="linkTable" type="text" readonly onclick="this.select()" />
-      <button onclick="copyLink('linkTable')">Copiar</button>
-    </div>
-    <div class="row">
-      <label class="muted" style="min-width:140px">Driver card</label>
-      <input id="linkCard" type="text" readonly onclick="this.select()" />
-      <button onclick="copyLink('linkCard')">Copiar</button>
-    </div>
-    <div class="row">
-      <label class="muted" style="min-width:140px">Tabela do piloto</label>
-      <input id="linkDriver" type="text" readonly onclick="this.select()" />
-      <button onclick="copyLink('linkDriver')">Copiar</button>
-    </div>
-    <div class="muted">Tamanhos sugeridos da fonte: tabela 540×1080 (650×1080 no LMU, por causa dos pneus e VE ao lado), driver card 560×150, tabela do piloto 340×620.</div>
+  <div class="tabs">
+    <button class="tab" data-tab="piloto" onclick="showTab('piloto')">Piloto</button>
+    <button class="tab" data-tab="transmissao" onclick="showTab('transmissao')">Transmissão</button>
+    <button class="tab" data-tab="ams2" onclick="showTab('ams2')">AMS2</button>
+    <button class="tab" data-tab="acc" onclick="showTab('acc')">ACC</button>
+    <button class="tab" data-tab="config" onclick="showTab('config')">Configuração</button>
   </div>
 
-  <div id="appSection" hidden>
-    <h3>Tabela do piloto (janela sobre o jogo)</h3>
+  <!-- ============================== PILOTO ============================== -->
+  <section class="tab-page" data-tab="piloto">
+    <div class="muted">Para quem está correndo: uma tabela pequena com as posições por classe e a pontuação ao vivo.</div>
+
+    <div id="appSection" hidden>
+      <h3>Janela sobre o jogo</h3>
+      <div class="box">
+        <div class="muted">O jogo precisa estar em janela sem bordas; em tela cheia exclusiva a janela não aparece.</div>
+        <div class="row">
+          <label style="min-width:220px"><input id="drvVisible" type="checkbox" style="width:auto" onchange="setDriverWindow({ visible: this.checked })" /> Mostrar sobre o jogo</label>
+          <button id="drvEdit" onclick="toggleDriverEdit()">Mover</button>
+          <button onclick="setDriverWindow({ reset: true })">Posição padrão</button>
+        </div>
+        <div class="row">
+          <label class="muted" style="min-width:140px">Tamanho</label>
+          <input id="drvScale" type="range" min="50" max="200" value="100" oninput="setDriverScale(this.value)" />
+          <span id="drvScaleVal" class="muted" style="min-width:36px">100%</span>
+        </div>
+        <div class="muted" id="drvHint"></div>
+      </div>
+    </div>
+
+    <h3>Link da tabela do piloto</h3>
     <div class="box">
-      <div class="muted">Mostra as posições por classe e a pontuação ao vivo numa janela transparente por cima do jogo. O jogo precisa estar em janela sem bordas; em tela cheia exclusiva a janela não aparece.</div>
+      <div class="muted">Para abrir num navegador, noutro monitor ou como fonte do OBS (tamanho sugerido 340×620).</div>
       <div class="row">
-        <label style="min-width:220px"><input id="drvVisible" type="checkbox" style="width:auto" onchange="setDriverWindow({ visible: this.checked })" /> Mostrar sobre o jogo</label>
-        <button id="drvEdit" onclick="toggleDriverEdit()">Mover</button>
-        <button onclick="setDriverWindow({ reset: true })">Posição padrão</button>
+        <input id="linkDriver" type="text" readonly onclick="this.select()" />
+        <button onclick="copyLink('linkDriver')">Copiar</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ TRANSMISSAO ============================ -->
+  <section class="tab-page" data-tab="transmissao">
+    <div class="muted">Para quem transmite: a tabela de tempos e o driver card que vão no OBS.</div>
+
+    <h3>Links para o OBS</h3>
+    <div class="box">
+      <div class="muted">No OBS: adicione uma Fonte de Navegador e cole o link. O fundo já é transparente.</div>
+      <div class="row">
+        <label class="muted" style="min-width:90px">Tabela</label>
+        <input id="linkTable" type="text" readonly onclick="this.select()" />
+        <button onclick="copyLink('linkTable')">Copiar</button>
       </div>
       <div class="row">
-        <label class="muted" style="min-width:140px">Tamanho</label>
-        <input id="drvScale" type="range" min="50" max="200" value="100" oninput="setDriverScale(this.value)" />
-        <span id="drvScaleVal" class="muted" style="min-width:36px">100%</span>
+        <label class="muted" style="min-width:90px">Driver card</label>
+        <input id="linkCard" type="text" readonly onclick="this.select()" />
+        <button onclick="copyLink('linkCard')">Copiar</button>
       </div>
-      <div class="muted" id="drvHint"></div>
+      <div class="muted">Tamanhos sugeridos da fonte: tabela 880×1080 (a tabela tem 500 de largura; à direita dela ficam a pista, a volta rápida e, no LMU, pneus e VE), driver card 560×160.</div>
     </div>
 
-    <h3>Arquivos</h3>
-    <button onclick="llgApp.openPath('config')" title="Cores de classe, logos, tabela de pontos (drivers-config.js)">Abrir pasta de configuração</button>
-    <button onclick="llgApp.openPath('data')" title="Configurações salvas e registros do listener e dos atalhos">Abrir pasta de dados e registros</button>
-  </div>
+    <h3>Durante a corrida</h3>
+    <div class="box">
+      <div class="muted">Os atalhos entre parênteses funcionam com o jogo em primeiro plano.</div>
+      <div class="row wrap">
+        <button onclick="send('overlay.prevPage')">← Página ( [ )</button>
+        <button onclick="send('overlay.nextPage')">Página → ( ] )</button>
+        <button onclick="send('overlay.prevColumn')">← Coluna ( , )</button>
+        <button onclick="send('overlay.nextColumn')">Coluna → ( . )</button>
+      </div>
+      <div class="row wrap">
+        <button onclick="send('overlay.toggleHighlight')">Destaque ( P )</button>
+        <button onclick="send('overlay.toggleBattles')" title="Só em corrida e sem safety car. Destaca os carros que ficam 10 s com menos de 0,3 s de intervalo, mostra a velocidade deles ao lado da tabela e trava a parte da tabela que fica rodando onde houver disputa.">Disputas ( 9 )</button>
+        <button onclick="send('race.reset')" title="Recalcula posições de largada e zera paradas/stint. Use no grid se a overlay foi aberta no meio da sessão.">Zerar largada e paradas</button>
+      </div>
+      <div class="row">
+        <label class="muted" style="min-width:140px" title="Número mostrado no cabeçalho da tabela: CORRIDA 1, CORRIDA 2... No automático vale a primeira corrida da etapa que ainda não tem resultado lançado no RLT.">Bateria da corrida</label>
+        <select id="heatRace" onchange="setHeat()">
+          <option value="">Automático (pelo RLT)</option>
+          <option value="0">0: só "CORRIDA", sem número</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="muted" style="min-width:140px" title="O mesmo para a classificação: QUALI 1, QUALI 2...">Bateria da quali</label>
+        <select id="heatQuali" onchange="setHeat()">
+          <option value="">Automático (pelo RLT)</option>
+          <option value="0">0: só "QUALI", sem número</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="muted" style="min-width:140px" title="O que a página de disputas (tecla 9) destaca.">Disputas ( 9 )</label>
+        <select id="battleScope" onchange="setBattleScope(this.value)">
+          <option value="all">Tabela toda, intervalo menor que 0,3 s</option>
+          <option value="focus">Só o piloto assistido, intervalo menor que 0,5 s</option>
+        </select>
+      </div>
+      <div class="row">
+        <label title="Passa sozinho pelas colunas da direita da tabela (Intervalo, Gap líder, Última volta...), como a tecla ponto. Na tela de pontuação, passa pelas colunas dela."><input id="altEnabled" type="checkbox" style="width:auto" onchange="setAlternate()" /> Alternar colunas sozinho</label>
+      </div>
+      <div class="row">
+        <label class="muted" style="min-width:140px">Tempo em cada coluna</label>
+        <input id="altSeconds" type="range" min="5" max="120" step="5" value="20" oninput="showAlternateSeconds(this.value)" onchange="setAlternate()" />
+        <span id="altSecondsVal" class="muted" style="min-width:36px">20 s</span>
+      </div>
+    </div>
 
-  <h3>Overlay</h3>
-  <button onclick="send('overlay.prevPage')">Página ← [</button>
-  <button onclick="send('overlay.nextPage')">Página → ]</button>
-  <button onclick="send('overlay.prevColumn')">Coluna ← ,</button>
-  <button onclick="send('overlay.nextColumn')">Coluna → .</button>
-  <button onclick="send('overlay.toggleHighlight')">Destaque (p)</button>
-  <button onclick="send('race.reset')" title="Recalcula posições de largada e zera paradas/stint. Use no grid se a overlay foi aberta no meio da sessão.">Zerar largada e paradas</button>
+    <h3>Aparência</h3>
+    <div class="box">
+      <div class="row">
+        <label class="muted" style="min-width:140px">Opacidade da tabela</label>
+        <input id="opTable" type="range" min="0" max="100" value="100" oninput="setOpacity('table', this.value)" />
+        <span id="opTableVal" class="muted" style="min-width:36px">100%</span>
+      </div>
+      <div class="row">
+        <label class="muted" style="min-width:140px">Opacidade das linhas</label>
+        <input id="opRows" type="range" min="0" max="100" value="100" oninput="setOpacity('rows', this.value)" />
+        <span id="opRowsVal" class="muted" style="min-width:36px">100%</span>
+      </div>
+      <div class="row">
+        <label class="muted" style="min-width:140px" title="Degradê com a cor principal da equipe (RLT) em cada linha da tabela. 0% desliga.">Cor da equipe</label>
+        <input id="teamTint" type="range" min="0" max="100" value="50" oninput="setTeamTint(this.value)" />
+        <span id="teamTintVal" class="muted" style="min-width:36px">50%</span>
+      </div>
+    </div>
 
-  <div class="box">
-    <div class="row">
-      <label class="muted" style="min-width:140px">Opacidade tabela</label>
-      <input id="opTable" type="range" min="0" max="100" value="100" oninput="setOpacity('table', this.value)" />
-      <span id="opTableVal" class="muted" style="min-width:36px">100%</span>
+    <h3>Logos</h3>
+    <div class="box">
+      <div class="muted">Repositório com as pastas teams/ e cars/. Aceita link do GitHub ou raw. A overlay busca primeiro aqui e usa a pasta local como reserva. Vazio = só pasta local.</div>
+      <div class="row">
+        <input id="assetsBaseUrl" type="text" placeholder="https://github.com/user/repo ou .../tree/main/assets" />
+        <button onclick="saveAssetsBase()">Salvar</button>
+        <button onclick="resetAssetsBase()">Local</button>
+      </div>
+      <div class="muted" id="assetsBaseStatus"></div>
+      <div class="sub">Logo de uma equipe</div>
+      <div class="muted">Escolha a equipe e informe o arquivo em teams/ (ex: minha_equipe.png). Vazio = padrão.</div>
+      <div id="teamLogos"></div>
     </div>
-    <div class="row">
-      <label class="muted" style="min-width:140px">Opacidade itens</label>
-      <input id="opRows" type="range" min="0" max="100" value="100" oninput="setOpacity('rows', this.value)" />
-      <span id="opRowsVal" class="muted" style="min-width:36px">100%</span>
-    </div>
-    <div class="row">
-      <label style="min-width:140px" title="Troca sozinho entre as posições da sessão e a pontuação do campeonato, na tabela e no driver card. Só funciona com temporada aplicada."><input id="altEnabled" type="checkbox" style="width:auto" onchange="setAlternate()" /> Alternar posições e pontuação</label>
-    </div>
-    <div class="row">
-      <label class="muted" style="min-width:140px">Tempo em cada tela</label>
-      <input id="altSeconds" type="range" min="5" max="120" step="5" value="20" oninput="showAlternateSeconds(this.value)" onchange="setAlternate()" />
-      <span id="altSecondsVal" class="muted" style="min-width:36px">20 s</span>
-    </div>
-    <div class="row">
-      <label class="muted" style="min-width:140px" title="Degradê com a cor principal da equipe (RLT) em cada linha da tabela. 0% desliga.">Cor da equipe</label>
-      <input id="teamTint" type="range" min="0" max="100" value="50" oninput="setTeamTint(this.value)" />
-      <span id="teamTintVal" class="muted" style="min-width:36px">50%</span>
-    </div>
-  </div>
+  </section>
 
-  <h3>Logos</h3>
-  <div class="box">
-    <div class="muted">Repo com pastas teams/ e cars/. Aceita link do GitHub ou raw. A overlay busca primeiro aqui e usa a pasta local como reserva. Vazio = só pasta local.</div>
-    <div class="row">
-      <input id="assetsBaseUrl" type="text" placeholder="https://github.com/user/repo ou .../tree/main/assets" />
-      <button onclick="saveAssetsBase()">Salvar</button>
-      <button onclick="resetAssetsBase()">Local</button>
-    </div>
-    <div class="muted" id="assetsBaseStatus"></div>
-    <h3 style="margin-top:16px">Logos de equipe</h3>
-    <div class="muted">Escolha a equipe e informe o arquivo em teams/ (ex: minha_equipe.png). Vazio = padrão (slug). Fallback: cars/.</div>
-    <div id="teamLogos"></div>
-  </div>
+  <!-- ================================ AMS2 ================================ -->
+  <section class="tab-page" data-tab="ams2">
+    <div class="muted">Opções que só valem para o Automobilista 2.</div>
 
-  <h3>Assetto Corsa 1</h3>
-  <div class="box">
-    <div class="muted"><b>Somente para o Assetto Corsa 1.</b> Automobilista 2, Le Mans Ultimate e Assetto Corsa Competizione não precisam disto. O Assetto Corsa 1 só informa todos os carros a apps que rodam dentro do jogo, então a overlay precisa instalar um app pequeno, sem janela, na pasta dele. O botão copia a pasta LLGOverlay para apps\python do jogo e ativa o app no python.ini.</div>
-    <div class="row">
-      <button id="acInstallBtn" onclick="installAcApp()">Instalar no Assetto Corsa 1</button>
+    <h3>Carsets (pinturas)</h3>
+    <div class="box">
+      <div class="muted">Baixa o carset da temporada e instala na pasta de pinturas do jogo. Só as pastas dos carros que vêm no carset são alteradas, nada é apagado e o arquivo _dist.xml do jogo nunca é substituído. Feche o Automobilista 2 antes.</div>
+      <div class="row">
+        <select id="carsetSeason"></select>
+        <button onclick="loadCarsets()" title="Busca de novo a lista de carsets">Recarregar</button>
+      </div>
+      <div class="row"><label><input type="radio" name="carsetMode" value="clean" checked style="width:auto" /> Trocar as pinturas desses carros: as antigas ganham "_old_" no nome <span class="muted">(recomendado)</span></label></div>
+      <div class="row"><label><input type="radio" name="carsetMode" value="keep" style="width:auto" /> Não mexer nas antigas: só copiar por cima</label></div>
+      <div class="row"><label><input type="radio" name="carsetMode" value="sameName" style="width:auto" /> Só atualizar os arquivos que já existem com o mesmo nome</label></div>
+      <div class="row">
+        <button id="carsetInstall" onclick="installCarset()">Instalar carset</button>
+      </div>
+      <div class="muted" id="carsetGame"></div>
+      <div class="muted" id="carsetStatus"></div>
+      <div id="carsetResult" class="muted" style="white-space:pre-wrap"></div>
     </div>
-    <div class="muted" id="acInstallStatus"></div>
-  </div>
+  </section>
 
-  <h3>Registro</h3>
-  <div id="rltLog"></div>
+  <!-- ================================ ACC ================================ -->
+  <section class="tab-page" data-tab="acc">
+    <div class="muted">Opções que só valem para o Assetto Corsa Competizione.</div>
+
+    <h3>Tempo máximo de stint</h3>
+    <div class="box">
+      <div class="muted">O ACC não informa o limite de stint nem o tempo de cada carro, então o limite é definido aqui e a tabela conta o tempo desde a largada ou a última saída do box. A coluna "Stint" vira um cronômetro (ex: 23:41): amarelo nos últimos 5 minutos antes do limite e vermelho quando estoura.</div>
+      <div class="row">
+        <label><input id="accStintOn" type="checkbox" style="width:auto" onchange="setAccStint()" /> A corrida tem tempo máximo de stint</label>
+      </div>
+      <div class="row">
+        <label class="muted" style="min-width:140px">Limite (minutos)</label>
+        <input id="accStintMin" type="number" min="1" max="600" step="1" value="35" style="max-width:110px" onchange="setAccStint()" />
+      </div>
+      <div class="muted" id="accStintStatus"></div>
+    </div>
+  </section>
+
+  <!-- ============================ CONFIGURACAO ============================ -->
+  <section class="tab-page" data-tab="config">
+    <div class="muted">Coisas que se mexe uma vez só.</div>
+
+    <h3>Chave de acesso</h3>
+    <div class="box">
+      <div class="muted">A chave que o organizador da liga passou. Fica guardada neste computador.</div>
+      <div class="row">
+        <input id="rltKey" type="password" placeholder="Cole a chave" />
+        <button onclick="saveKey()">Salvar</button>
+        <button onclick="clearRlt()" title="Apaga a chave e a temporada deste computador">Limpar</button>
+      </div>
+      <div class="muted" id="rltStatus"></div>
+    </div>
+
+    <h3>Assetto Corsa 1</h3>
+    <div class="box">
+      <div class="muted"><b>Somente para o Assetto Corsa 1.</b> Automobilista 2, Le Mans Ultimate e Assetto Corsa Competizione não precisam disto. O Assetto Corsa 1 só informa todos os carros a apps que rodam dentro do jogo, então a overlay precisa instalar um app pequeno, sem janela, na pasta dele. O botão copia a pasta LLGOverlay para apps\python do jogo e ativa o app no python.ini.</div>
+      <div class="row">
+        <button id="acInstallBtn" onclick="installAcApp()">Instalar no Assetto Corsa 1</button>
+      </div>
+      <div class="muted" id="acInstallStatus"></div>
+    </div>
+
+    <div id="appFiles" hidden>
+      <h3>Abrir junto com o aplicativo</h3>
+      <div class="box">
+        <div class="muted">Outros programas para abrir sempre que o LLG Overlay abrir, como o OBS. O que já estiver aberto não abre de novo.</div>
+        <div id="companionList"></div>
+        <div class="row wrap">
+          <button onclick="companionAction('add')">Adicionar programa…</button>
+          <button id="companionLaunchAll" onclick="companionAction('launchAll')">Abrir todos agora</button>
+        </div>
+        <div class="muted" id="companionStatus"></div>
+      </div>
+
+      <h3>Arquivos</h3>
+      <div class="box">
+        <div class="row wrap">
+          <button onclick="llgApp.openPath('config')" title="Cores de classe, logos, tabela de pontos (drivers-config.js)">Abrir pasta de configuração</button>
+          <button onclick="llgApp.openPath('data')" title="Configurações salvas e registros do listener e dos atalhos">Abrir pasta de dados e registros</button>
+        </div>
+      </div>
+    </div>
+
+    <h3>Registro</h3>
+    <div id="rltLog"></div>
+  </section>
 
   <script src="panel.js"></script>
 </body>

@@ -106,13 +106,16 @@ function createRaceState(clock) {
     if (lap > st.timer.exitLap || crossedLine) st.timer = null;
   }
 
-  function updatePitStats(st, entry, tracking) {
+  // t: agora. O stint tambem e contado em TEMPO (stintStartAt): comeca na
+  // largada e recomeca quando o carro sai do box.
+  function updatePitStats(st, entry, tracking, t) {
     const laps = entry.lapsCompleted || 0;
     const inPit = isInPit(entry);
     if (!tracking) {
       st.wasInPit = inPit;
       st.stintStartLap = laps;
       st.stintLaps = 0;
+      st.stintStartAt = sessionStartedAt;
       return;
     }
     // quem ja recebeu a bandeirada e levado para o box pelo jogo: nao e parada
@@ -123,6 +126,7 @@ function createRaceState(clock) {
     } else if (!inPit && st.wasInPit) {
       st.wasInPit = false;
       st.stintStartLap = laps;
+      st.stintStartAt = t;
     }
     st.stintLaps = Math.max(0, laps - st.stintStartLap);
   }
@@ -155,11 +159,11 @@ function createRaceState(clock) {
 
       let st = pit.get(name);
       if (!st) {
-        st = { stops: 0, wasInPit: false, stintStartLap: entry.lapsCompleted || 0, stintLaps: 0, timer: null };
+        st = { stops: 0, wasInPit: false, stintStartLap: entry.lapsCompleted || 0, stintLaps: 0, stintStartAt: t, timer: null };
         pit.set(name, st);
       }
       updatePitTimer(st, entry, t, Number(session.trackLength) || 0);
-      updatePitStats(st, entry, tracking);
+      updatePitStats(st, entry, tracking, t);
 
       const timer = st.timer;
       const inPitNow = isInPit(entry) || isExitingPit(entry);
@@ -169,6 +173,8 @@ function createRaceState(clock) {
         // o LMU informa as paradas de cada carro (entry.pitStops); o AMS2 nao, entao contamos
         stops: typeof entry.pitStops === "number" ? entry.pitStops : st.stops,
         stintLaps: st.stintLaps,
+        // tempo do stint atual: parado em zero no box e congelado na bandeirada
+        stintMs: !isRace || st.wasInPit ? 0 : Math.max(0, (finished.has(name) ? finished.get(name) : t) - st.stintStartAt),
         outLap:
           inPitNow ||
           (!!timer && timer.phase === "done") ||
