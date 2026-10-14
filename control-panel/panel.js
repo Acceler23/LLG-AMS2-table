@@ -50,6 +50,162 @@ function setTeamTint(value) {
   send("overlay.setTeamTint", { value: v / 100 });
 }
 
+// ---------------------------------------------------------------- AMS2: carsets
+// O servidor baixa o carset da temporada e instala na pasta do jogo; aqui o
+// painel so escolhe a temporada e o modo, e acompanha o andamento.
+const CARSET_PHASES = { checking: "Conferindo...", downloading: "Baixando", extracting: "Extraindo os arquivos...", installing: "Copiando para a pasta do jogo..." };
+const CARSET_MODES = { clean: "antigas renomeadas para _old_", keep: "antigas mantidas", sameName: "só arquivos de mesmo nome" };
+let carsetPoll = null;
+
+async function loadCarsets() {
+  const sel = document.getElementById("carsetSeason");
+  const status = document.getElementById("carsetStatus");
+  try {
+    const body = await api("/api/carsets");
+    const current = sel.value;
+    sel.innerHTML = "";
+    (body.seasons || []).forEach((name) => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    });
+    // comeca na temporada que esta aplicada no painel, se ela tiver carset
+    const applied = document.getElementById("rltSeason");
+    const appliedName = applied && applied.selectedOptions[0] && applied.value ? applied.selectedOptions[0].textContent : "";
+    const wanted = [current, appliedName].find((n) => n && (body.seasons || []).includes(n));
+    if (wanted) sel.value = wanted;
+    document.getElementById("carsetGame").textContent = body.gameDir
+      ? "Pasta do jogo: " + body.gameDir + (body.gameRunning ? " (o jogo está aberto: feche antes de instalar)" : "")
+      : "Automobilista 2 não encontrado nas bibliotecas da Steam.";
+    document.getElementById("carsetInstall").disabled = !body.gameDir || !(body.seasons || []).length;
+    status.textContent = (body.seasons || []).length ? "" : "Nenhum carset na lista.";
+    showCarsetStatus(body.status);
+  } catch (e) {
+    status.textContent = "Não foi possível ler a lista: " + e.message;
+    document.getElementById("carsetInstall").disabled = true;
+  }
+}
+
+function showCarsetStatus(st) {
+  if (!st) return;
+  const status = document.getElementById("carsetStatus");
+  const result = document.getElementById("carsetResult");
+  const btn = document.getElementById("carsetInstall");
+  if (st.running) {
+    btn.disabled = true;
+    status.textContent = `${st.season}: ${CARSET_PHASES[st.phase] || st.phase}${st.phase === "downloading" && st.percent ? " " + st.percent + "%" : ""}`;
+    if (!carsetPoll) carsetPoll = setInterval(pollCarset, 700);
+    return;
+  }
+  if (carsetPoll) {
+    clearInterval(carsetPoll);
+    carsetPoll = null;
+    btn.disabled = false;
+  }
+  if (st.phase === "error") {
+    status.textContent = `${st.season}: não instalado. ${st.error}`;
+    result.textContent = "";
+  } else if (st.phase === "done" && st.result) {
+    status.textContent = `${st.season}: instalado (${CARSET_MODES[st.result.mode] || st.result.mode}).`;
+    const lines = st.result.cars.map((c) => {
+      const parts = [`${c.copied} arquivos copiados`];
+      if (c.renamed) parts.push(`${c.renamed} itens antigos renomeados para _old_`);
+      if (c.skipped) parts.push(`${c.skipped} não copiados`);
+      return `${c.car}: ${parts.join(", ")}`;
+    });
+    if (st.result.unknown && st.result.unknown.length) lines.push(`Pastas ignoradas (não são carros do jogo): ${st.result.unknown.join(", ")}`);
+    result.textContent = lines.join("\n");
+  }
+}
+
+async function pollCarset() {
+  try {
+    const body = await api("/api/carsets/status");
+    const wasRunning = !!carsetPoll;
+    showCarsetStatus(body.status);
+    if (wasRunning && !body.status.running) log("Carset " + body.status.season + ": " + (body.status.phase === "done" ? "instalado" : body.status.error));
+  } catch (_) {}
+}
+
+async function installCarset() {
+  const season = document.getElementById("carsetSeason").value;
+  const mode = (document.querySelector('input[name="carsetMode"]:checked') || {}).value || "clean";
+  if (!season) return;
+  document.getElementById("carsetResult").textContent = "";
+  try {
+    await api("/api/carsets/install", { method: "POST", body: JSON.stringify({ season, mode }) });
+    log(`Carset ${season}: instalando...`);
+    showCarsetStatus({ running: true, phase: "checking", season, percent: 0 });
+  } catch (e) {
+    document.getElementById("carsetStatus").textContent = "Não foi possível instalar: " + e.message;
+  }
+}
+
+loadCarsets();
+
+// ---------------------------------------------------------------- ACC
+// Tempo maximo de stint: o servidor guarda a escolha e manda para a tabela.
+function showAccStint(body) {
+  const minutes = Number(body && body.minutes) || 0;
+  document.getElementById("accStintOn").checked = minutes > 0;
+  if (minutes > 0) document.getElementById("accStintMin").value = minutes;
+  document.getElementById("accStintMin").disabled = !(minutes > 0);
+  document.getElementById("accStintStatus").textContent =
+    minutes > 0 ? `Limite de ${minutes} min ligado. A coluna "Stint" vira um cronômetro.` : `Sem limite: a coluna "Stint" mostra voltas.`;
+}
+
+async function setAccStint() {
+  const on = document.getElementById("accStintOn").checked;
+  const typed = Math.floor(Number(document.getElementById("accStintMin").value)) || 35;
+  try {
+    const body = await api("/api/acc/stint", { method: "POST", body: JSON.stringify({ minutes: on ? Math.max(1, typed) : 0 }) });
+    showAccStint(body);
+    log(body.minutes > 0 ? `ACC: stint máximo de ${body.minutes} min` : "ACC: sem stint máximo");
+  } catch (e) {
+    log("ERRO stint: " + e.message);
+  }
+}
+
+api("/api/acc/stint").then(showAccStint).catch(() => {});
+
+// Bateria mostrada no cabecalho da tabela (CORRIDA 2, QUALI 1): automatico
+// (vazio), 0 = sem numero, ou o numero escolhido
+function setHeat() {
+  const read = (id) => {
+    const v = document.getElementById(id).value;
+    return v === "" ? null : Number(v);
+  };
+  const value = { race: read("heatRace"), quali: read("heatQuali") };
+  try {
+    localStorage.setItem("heatPanel", JSON.stringify(value));
+  } catch (_) {}
+  send("overlay.setHeat", value);
+}
+
+// os menus abrem na ultima escolha
+try {
+  const savedHeat = JSON.parse(localStorage.getItem("heatPanel") || "null");
+  if (savedHeat) {
+    document.getElementById("heatRace").value = savedHeat.race == null ? "" : String(savedHeat.race);
+    document.getElementById("heatQuali").value = savedHeat.quali == null ? "" : String(savedHeat.quali);
+  }
+} catch (_) {}
+
+// Pagina de disputas (tecla 9): a tabela toda (0,3 s) ou so o piloto assistido (0,5 s)
+function setBattleScope(value) {
+  try {
+    localStorage.setItem("battleScopePanel", value);
+  } catch (_) {}
+  send("overlay.setBattleScope", { value });
+}
+
+// o menu abre na ultima escolha
+try {
+  const savedScope = localStorage.getItem("battleScopePanel");
+  if (savedScope) document.getElementById("battleScope").value = savedScope;
+} catch (_) {}
+
 // o slider abre na ultima intensidade escolhida
 try {
   const saved = localStorage.getItem("teamTintPanel");
@@ -85,6 +241,20 @@ async function installAcApp() {
     log("Assetto Corsa 1: " + err.message);
   }
   btn.disabled = false;
+}
+
+// Estado da chave e da temporada, em palavras (aba Configuracao)
+function showRltStatus(st) {
+  const el = document.getElementById("rltStatus");
+  if (!el) return;
+  if (!st || !st.hasKey) {
+    el.textContent = "Sem chave salva: a tabela usa só os dados do jogo.";
+    return;
+  }
+  const parts = ["Chave salva"];
+  if (st.leagueName) parts.push("liga " + st.leagueName);
+  parts.push(st.selectedSeasonId ? "temporada aplicada" : "nenhuma temporada aplicada");
+  el.textContent = parts.join(" · ");
 }
 
 async function api(path, opts = {}) {
@@ -136,7 +306,7 @@ async function saveKey() {
     });
     log(`League ok. Seasons ativas: ${(body.seasons || []).length}`);
     renderSeasons(body.seasons || []);
-    document.getElementById("rltStatus").textContent = JSON.stringify(body.status || {}, null, 0);
+    showRltStatus(body.status || {});
   } catch (e) {
     log("ERRO key: " + e.message);
   }
@@ -221,7 +391,7 @@ async function applySeason() {
       });
       renderClasses([]);
       renderTeamLogos([]);
-      document.getElementById("rltStatus").textContent = JSON.stringify(body.status || {}, null, 0);
+      showRltStatus(body.status || {});
       log("OK — overlay usa apenas dados do AMS2");
       return;
     }
@@ -235,7 +405,7 @@ async function applySeason() {
     log(`Season aplicada: ${p.seasonName} | classes=${(p.classes || []).length} | drivers=${nDrivers}`);
     renderClasses(p.classes || []);
     renderTeamLogos(p.standingsRows || []);
-    document.getElementById("rltStatus").textContent = JSON.stringify(body.status || {}, null, 0);
+    showRltStatus(body.status || {});
   } catch (e) {
     log("ERRO season: " + e.message);
   }
@@ -324,7 +494,7 @@ async function saveFirstRunKey() {
     showFirstRun(false);
     log(`Chave salva. Seasons ativas: ${(body.seasons || []).length}`);
     renderSeasons(body.seasons || []);
-    document.getElementById("rltStatus").textContent = JSON.stringify(body.status || {}, null, 0);
+    showRltStatus(body.status || {});
   } catch (e) {
     status.textContent = "Não funcionou: " + e.message;
   }
@@ -334,7 +504,7 @@ async function saveFirstRunKey() {
 async function refreshStatus() {
   try {
     const body = await api("/api/rlt/status");
-    document.getElementById("rltStatus").textContent = JSON.stringify(body, null, 0);
+    showRltStatus(body);
     let skipped = false;
     try {
       skipped = sessionStorage.getItem("skipFirstRun") === "1";
@@ -350,7 +520,7 @@ async function refreshStatus() {
 }
 
 // ---------------------------------------------------------------- alternancia automatica
-// Posicoes da sessao <-> pontuacao. O servidor guarda a escolha e faz a troca.
+// Colunas da tabela rodando sozinhas. O servidor guarda a escolha e faz a troca.
 function showAlternateSeconds(value) {
   document.getElementById("altSecondsVal").textContent = `${value} s`;
 }
@@ -433,7 +603,79 @@ function setDriverScale(value) {
   setDriverWindow({ scale: pct / 100 });
 }
 
+// Programas que abrem junto com o aplicativo (so existe dentro do aplicativo).
+// A lista cresce e encolhe conforme os itens: uma linha por programa.
+function showCompanion(info) {
+  if (!info) return;
+  const items = info.items || [];
+  const list = document.getElementById("companionList");
+  list.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "muted";
+    empty.style.margin = "8px 0";
+    empty.textContent = "Nenhum programa na lista.";
+    list.appendChild(empty);
+  }
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.readOnly = true;
+    input.value = item.path;
+    input.title = item.path;
+    const open = document.createElement("button");
+    open.textContent = "Abrir";
+    open.onclick = () => companionAction("launch", item.path);
+    const remove = document.createElement("button");
+    remove.textContent = "Remover";
+    remove.onclick = () => companionAction("remove", item.path);
+    row.append(input, open, remove);
+    list.appendChild(row);
+    const msg = item.message || (item.exists ? "" : "Arquivo não encontrado. Remova e adicione de novo.");
+    if (msg) {
+      const note = document.createElement("div");
+      note.className = "muted";
+      note.textContent = msg;
+      list.appendChild(note);
+      if (item.message) log(`Abrir junto: ${item.path} → ${item.message}`);
+    }
+  });
+  document.getElementById("companionLaunchAll").disabled = !items.length;
+  document.getElementById("companionStatus").textContent = info.note || "";
+  if (info.note) log("Abrir junto: " + info.note);
+}
+
+async function companionAction(action, file) {
+  if (!window.llgApp || !window.llgApp.companion) return;
+  try {
+    showCompanion(await window.llgApp.companion[action](file));
+  } catch (e) {
+    document.getElementById("companionStatus").textContent = "Erro: " + e.message;
+  }
+}
+
 if (window.llgApp) {
   document.getElementById("appSection").hidden = false;
+  document.getElementById("appFiles").hidden = false;
+  if (window.llgApp.companion) window.llgApp.companion.get().then(showCompanion);
   window.llgApp.driver.get().then(showDriverWindowState);
 }
+
+// ---------------------------------------------------------------- abas
+// Piloto / Transmissao / Configuracao. A ultima aba aberta fica lembrada.
+function showTab(name) {
+  document.querySelectorAll(".tab, .tab-page").forEach((el) => el.classList.toggle("active", el.dataset.tab === name));
+  try {
+    localStorage.setItem("panelTab", name);
+  } catch (_) {}
+}
+
+(function () {
+  let saved = null;
+  try {
+    saved = localStorage.getItem("panelTab");
+  } catch (_) {}
+  showTab(document.querySelector(`.tab-page[data-tab="${saved}"]`) ? saved : "piloto");
+})();

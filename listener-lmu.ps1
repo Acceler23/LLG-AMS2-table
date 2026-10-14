@@ -73,6 +73,13 @@ $TEL_ACTIVE           = 128464    # uchar, quantos TelemInfoV01 sao validos
 $TEL                  = 128468    # TelemInfoV01[104]
 $TEL_SIZE             = 1888
 $T_ID                 = 0         # long, slot (casa com V_ID)
+$T_GEAR               = 352       # long: -1 re, 0 neutro, 1+ marchas
+$T_THROTTLE           = 388       # double, 0.0 a 1.0 (pedal do piloto, sem filtro)
+$T_BRAKE              = 396       # double, 0.0 a 1.0
+# O acelerador da Shared Memory do LMU nao chega a 1.0 com o pedal no fundo
+# (para em 0.87 a 0.98, conforme o carro). Para a barra do driver card encher,
+# o valor e esticado: a partir deste ponto ja conta como pe no fundo.
+$THROTTLE_FULL_AT     = 0.85
 $T_FUEL               = 524       # double, litros
 $T_FRONT_COMPOUND     = 620       # char[18], ex: "Medium"
 $T_REAR_COMPOUND      = 638       # char[18]
@@ -296,6 +303,7 @@ while ($true) {
                     # so LMU: pneus e energia virtual (vem da telemetria do mesmo slot)
                     $carName = $vehicleName
                     $tyreFront = $null; $tyreRear = $null; $tyreWear = $null; $tyres = $null
+                    $throttle = $null; $brake = $null; $gear = $null
                     $virtualEnergy = $null; $lapInvalid = ($buf[$v + $V_COUNT_LAP_FLAG] -ne 2)
                     if ($telemBySlot.ContainsKey($slot)) {
                         $t = $telemBySlot[$slot]
@@ -312,6 +320,10 @@ while ($true) {
                             $type = [int]$buf[$t + $T_WHEEL + ($_ * $WHEEL_SIZE) + $W_COMPOUND_TYPE]
                             if ($COMPOUND_TYPES.ContainsKey($type)) { $COMPOUND_TYPES[$type] } else { "" }
                         })
+                        # pedais e marcha: o LMU informa os de todos os carros
+                        $throttle = [math]::Round([math]::Max(0.0, [math]::Min(1.0, [BitConverter]::ToDouble($buf, $t + $T_THROTTLE) / $THROTTLE_FULL_AT)), 2)
+                        $brake = [math]::Round([math]::Max(0.0, [math]::Min(1.0, [BitConverter]::ToDouble($buf, $t + $T_BRAKE))), 2)
+                        $gear = [BitConverter]::ToInt32($buf, $t + $T_GEAR)
                         $lapInvalid = ($buf[$t + $T_LAP_INVALIDATED] -ne 0)
                         # carros sem energia virtual (ex: LMP2) vem com 0 e tem combustivel
                         $ve = [BitConverter]::ToSingle($buf, $t + $T_VIRTUAL_ENERGY)
@@ -354,6 +366,9 @@ while ($true) {
                         tyres         = $tyres
                         tyreWear      = $tyreWear
                         virtualEnergy = $virtualEnergy
+                        throttle      = $throttle
+                        brake         = $brake
+                        gear          = $gear
                     })
                 }
 

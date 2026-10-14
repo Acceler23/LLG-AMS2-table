@@ -7,16 +7,22 @@
 </head>
 <body>
   <div id="timing-table">
+    <!-- cabecalho no estilo do GT World Challenge: campeonato | sessao, e
+         embaixo o relogio, a pagina e o titulo da coluna da direita. A pista
+         fica numa etiqueta FORA da tabela, a direita (#trackTag, la embaixo). -->
     <div class="title-bar">
-      <span class="title-text" id="sessionLabel">CORRIDA</span>
-      <span class="title-timer" id="sessionTimer">--:--</span>
+      <div class="tb-brand"><span class="tb-line1" id="headerTitle"></span><span class="tb-line2" id="headerSubtitle"></span></div>
+      <div class="tb-session" id="sessionLabel">CORRIDA</div>
     </div>
     <div class="header">
+      <span class="tb-timer" id="sessionTimer">--:--</span>
       <span class="col pos" id="pageLabel">Geral</span>
       <span class="col right" id="rightColumnLabel">Intervalo</span>
     </div>
     <div id="rows"></div>
   </div>
+  <!-- pista: etiqueta ao lado da tabela, na altura da primeira linha do cabecalho -->
+  <div id="trackTag" class="tb-track no-track"><span class="tb-line1" id="trackName"></span><span class="tb-line2 tb-country"><img id="trackFlag" class="tb-flag" alt="" style="display:none" /><span id="trackLayout"></span></span></div>
 
   <script src="shared/names.js"></script>
   <script src="shared/gaps.js"></script>
@@ -24,7 +30,10 @@
   <script src="shared/logos.js"></script>
   <script src="shared/groups.js"></script>
   <script src="shared/display.js"></script>
+  <script src="shared/sectors.js"></script>
+  <script src="shared/battles.js"></script>
   <script src="drivers-config.js"></script>
+  <script src="track-names.js"></script>
   <script src="timing-table.js"></script>
 </body>
 </html>

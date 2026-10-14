@@ -102,6 +102,131 @@ async function fetchStandings(seasonId) {
   return data;
 }
 
+// Etapas da temporada (calendario), para o cabecalho da tabela: numero da
+// etapa, nome da pista como esta no RLT, pais, e as baterias (corridas e
+// classificacoes) com a marca de quais ja tem resultado lancado.
+// O pais e as baterias so vem no detalhe de cada evento. Evento concluido nao
+// muda mais e e buscado uma vez so; os demais sao buscados de novo quando a
+// data esta perto (o resultado da corrida 1 pode ser lancado antes da 2).
+const eventDetails = new Map(); // eventId -> { country, races, qualifications, final }
+const EVENT_NEAR_MS = 3 * 24 * 60 * 60 * 1000;
+
+function seasonEvents(season) {
+  return ((season && (season.events || season.Events)) || []).map((e) => ({
+    eventId: e.eventId,
+    round: e.round,
+    name: e.name || null,
+    trackName: e.trackName || null,
+    uniqueName: e.uniqueName || null,
+    circuitOrigin: e.circuitOrigin || null,
+    eventDate: e.eventDateTime || e.eventDate || null,
+    completedStatus: e.completedStatus || null,
+    country: null,
+    races: [],
+    qualifications: [],
+  }));
+}
+
+// Baterias de um tipo ("Race" ou "Qualification") na ordem em que acontecem.
+function eventHeats(detail, type) {
+  return ((detail && detail.sessions) || [])
+    .map((s) => (s && s.sessionInfo) || {})
+    .filter((info) => info.sessionType === type)
+    .sort((a, b) => String(a.sessionDate || "").localeCompare(String(b.sessionDate || "")) || (a.sessionPosition || 0) - (b.sessionPosition || 0))
+    .map((info) => ({ caption: info.sessionCaption || null, completed: String(info.completedStatus || "").toLowerCase() === "completed" }));
+}
+
+function eventDetailInfo(detail, completedStatus) {
+  const track = (detail && detail.event && detail.event.track) || {};
+  return {
+    country: track.country || "",
+    races: eventHeats(detail, "Race"),
+    qualifications: eventHeats(detail, "Qualification"),
+    final: String(completedStatus || "").toLowerCase() === "completed",
+  };
+}
+
+async function fetchEventDetails(events, nowMs) {
+  const now = nowMs != null ? nowMs : Date.now();
+  for (const e of events) {
+    if (e.eventId == null) continue;
+    const have = eventDetails.get(e.eventId);
+    if (have && have.final) continue;
+    const when = Date.parse(e.eventDate || "");
+    const near = !Number.isNaN(when) && Math.abs(when - now) <= EVENT_NEAR_MS;
+    if (have && !near) continue; // longe da data: nada mudou
+    try {
+      const data = unwrap(await rltFetch(`/api/public/v1/events/${e.eventId}`));
+      eventDetails.set(e.eventId, eventDetailInfo(data, e.completedStatus));
+    } catch (_) {
+      // sem o detalhe desta vez: tenta de novo na proxima atualizacao
+    }
+  }
+  events.forEach((e) => {
+    const d = eventDetails.get(e.eventId);
+    if (!d) return;
+    e.country = d.country || null;
+    e.races = d.races;
+    e.qualifications = d.qualifications;
+  });
+  return events;
+}
+
+// Lineup da temporada: todas as vagas, titulares e reservas, com classe e
+// equipe. E a unica fonte para quem ainda nao correu (a pontuacao so lista
+// quem ja participou de alguma etapa) e para os reservas.
+async function fetchLineups(seasonId) {
+  const data = unwrap(await rltFetch(`/api/public/v1/seasons/${seasonId}/lineups`));
+  cache.lineups = data;
+  return data;
+}
+
+// Vagas do lineup no mesmo formato das linhas da pontuacao.
+function lineupSeatsToDrivers(lineups) {
+  const seats = (lineups && (lineups.seats || lineups.Seats)) || [];
+  return seats
+    .filter((seat) => seat && (seat.driverName || seat.DriverName))
+    .map((seat) => {
+      const team = seat.team || seat.Team || null;
+      return {
+        driverName: seat.driverName || seat.DriverName,
+        driverInfo: seat.driverInfo || seat.DriverInfo || {},
+        seatType: seat.seatType || seat.SeatType || null,
+        classInfo: seat.classInfo || seat.ClassInfo || null,
+        teamName: team ? team.name || team.Name || null : null,
+        teamInfo: team
+          ? { fullName: team.fullName || team.FullName || null, primaryColor: team.primaryColor || null, secondaryColor: team.secondaryColor || null }
+          : null,
+      };
+    });
+}
+
+// Junta o lineup com a pontuacao: quem so esta no lineup entra na lista (sem
+// pontos), e quem ja esta na pontuacao sem classe ou equipe ganha as do lineup.
+function mergeLineupIntoStandings(standings, lineupDrivers) {
+  const out = standings || { driverStandings: [] };
+  if (!lineupDrivers || !lineupDrivers.length) return out;
+  const stats = out.seasonStatistics || out;
+  const base = stats.driverStandings || out.driverStandings || [];
+  const byName = new Map(base.map((d) => [String(d.driverName || d.DriverName || "").toLowerCase(), d]));
+  lineupDrivers.forEach((d) => {
+    const key = String(d.driverName || "").toLowerCase();
+    if (!key) return;
+    const have = byName.get(key);
+    if (!have) {
+      byName.set(key, d);
+      base.push(d);
+      return;
+    }
+    if (!have.classInfo && !have.ClassInfo && d.classInfo) have.classInfo = d.classInfo;
+    if (!have.teamName && d.teamName) have.teamName = d.teamName;
+    if (!have.teamInfo && !have.TeamInfo && d.teamInfo) have.teamInfo = d.teamInfo;
+  });
+  if (stats.driverStandings) stats.driverStandings = base;
+  else out.driverStandings = base;
+  return out;
+}
+
 function pushAlias(set, value) {
   const n = normalizeName(value);
   if (n) set.add(n);
@@ -441,6 +566,7 @@ function clearSeason() {
   cache.classes = [];
   cache.drivers = [];
   cache.standingsRows = [];
+  cache.events = [];
   stopRefresh();
   if (hasKey()) startRefresh();
   return null;
@@ -455,6 +581,7 @@ async function selectSeason(seasonId) {
   const season = detail && detail.season;
   const classes = (season && season.multiclass && season.multiclass.classes) || [];
   cache.classes = classes;
+  cache.events = await fetchEventDetails(seasonEvents(season));
 
   let standings = null;
   try {
@@ -462,22 +589,16 @@ async function selectSeason(seasonId) {
   } catch (_) {
     standings = null;
   }
-  const lineupDrivers = collectLineupDrivers(detail);
-  if (lineupDrivers.length) {
-    if (!standings) standings = { driverStandings: [] };
-    const stats = standings.seasonStatistics || standings;
-    const base = stats.driverStandings || standings.driverStandings || [];
-    const seen = new Set(base.map((d) => String(d.driverName || d.DriverName || "").toLowerCase()));
-    lineupDrivers.forEach((d) => {
-      const key = String(d.driverName || "").toLowerCase();
-      if (key && !seen.has(key)) {
-        seen.add(key);
-        base.push(d);
-      }
-    });
-    if (stats.driverStandings) stats.driverStandings = base;
-    else standings.driverStandings = base;
+  // Lineup: titulares que ainda nao correram e reservas nao aparecem na
+  // pontuacao, entao vem daqui (com classe e equipe).
+  let lineups = null;
+  try {
+    lineups = await fetchLineups(selectedSeasonId);
+  } catch (_) {
+    lineups = null;
   }
+  const lineupDrivers = lineupSeatsToDrivers(lineups).concat(collectLineupDrivers(detail));
+  standings = mergeLineupIntoStandings(standings, lineupDrivers);
   cache.drivers = buildDrivers(standings, classes);
   cache.standingsRows = buildStandingsRows(standings, classes);
   startRefresh();
@@ -535,6 +656,7 @@ function getOverlayPayload() {
     classes: cache.classes || [],
     drivers: cache.drivers || [],
     standingsRows: cache.standingsRows || [],
+    events: cache.events || [],
   };
 }
 
@@ -553,6 +675,12 @@ function getStatus() {
 
 
 module.exports = {
+  seasonEvents,
+  eventDetailInfo,
+  lineupSeatsToDrivers,
+  mergeLineupIntoStandings,
+  buildDrivers,
+  buildStandingsRows,
   setApiKey,
   getApiKey,
   hasKey,

@@ -75,6 +75,10 @@ html, body {
   grid-template-columns: 26px 24px 1fr 42px 62px;
 }
 
+/* uma classe so: sem a coluna da posicao na classe */
+.dt-cols.single { grid-template-columns: 26px 1fr 62px; }
+.dt-cols.single.with-pts { grid-template-columns: 26px 1fr 42px 62px; }
+
 .dt-head-col.center { text-align: center; }
 
 /* cabecalho da classe com os titulos das colunas de pontos e intervalo */

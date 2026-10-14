@@ -15,7 +15,7 @@ const WS_URL = `ws://${location.hostname}:${location.port || 8080}/ws`;
 
 const BASE_WIDTH = 340; // largura do desenho em px (driver-table.css)
 // ordem geral: o lider + 2 carros a frente do piloto + o piloto + 2 atras
-const POSITION_NEIGHBOURS = 2;
+const POSITION_WINDOW = 5; // carros em volta do piloto na ordem geral (contando ele)
 const POINTS_ROWS = 5; // linhas da pontuacao (lider + vizinhos)
 
 const SESSION_LABELS = {
@@ -279,21 +279,24 @@ function buildPoints() {
   return { classMode, byClass, byDriver };
 }
 
-// Indices a mostrar na ordem geral: o lider, os 2 a frente do piloto, o
-// piloto e os 2 atras. Nao completa com outros carros quando o piloto esta
-// no comeco ou no fim da fila. Sem piloto em foco, mostra os primeiros.
-function positionIndices(length, myIndex) {
+// Indices a mostrar na ordem geral: sempre 5 carros em volta do piloto (2 a
+// frente, ele, 2 atras; nas pontas a janela desliza, entao o primeiro ve os 4
+// de tras e o ultimo os 4 da frente), mais o lider geral e o lider da classe
+// do piloto quando estao fora dessa janela. Sem piloto em foco, os primeiros.
+function positionIndices(length, myIndex, classLeaderIndex) {
   const out = [];
   if (length <= 0) return out;
+  const size = Math.min(length, POSITION_WINDOW);
   if (myIndex < 0) {
-    for (let i = 0; i < Math.min(length, 2 * POSITION_NEIGHBOURS + 2); i++) out.push(i);
+    for (let i = 0; i < Math.min(length, POSITION_WINDOW + 1); i++) out.push(i);
     return out;
   }
-  out.push(0);
-  const from = Math.max(1, myIndex - POSITION_NEIGHBOURS);
-  const to = Math.min(length - 1, myIndex + POSITION_NEIGHBOURS);
-  for (let i = from; i <= to; i++) out.push(i);
-  return out;
+  let from = myIndex - Math.floor(POSITION_WINDOW / 2);
+  from = Math.max(0, Math.min(from, length - size));
+  const picked = new Set([0]);
+  if (classLeaderIndex >= 0 && classLeaderIndex < length) picked.add(classLeaderIndex);
+  for (let i = from; i < from + size; i++) picked.add(i);
+  return Array.from(picked).sort((a, b) => a - b);
 }
 
 // Ordem geral da corrida, com o lider e os carros em volta do piloto.
@@ -317,10 +320,15 @@ function renderPositions(me, points) {
     });
     html += "</div>";
   }
+  // Com uma classe so, a posicao geral e a da classe sao o mesmo numero:
+  // fica uma unica coluna de posicao.
+  const multiclass = classKeys.length > 1;
   // titulos das colunas: posicao geral, posicao na classe, pontos, intervalo
   html +=
-    `<div class="dt-cols ${points ? "with-pts" : ""}">` +
-    '<span class="dt-head-col center">ger</span><span class="dt-head-col center">cls</span><span></span>' +
+    `<div class="dt-cols ${points ? "with-pts" : ""} ${multiclass ? "" : "single"}">` +
+    (multiclass
+      ? '<span class="dt-head-col center">ger</span><span class="dt-head-col center">cls</span><span></span>'
+      : '<span class="dt-head-col center">pos</span><span></span>') +
     (points ? '<span class="dt-head-col">pts</span>' : "") +
     `<span class="dt-head-col gap">${me ? "p/ você" : isRace() ? "int." : "volta"}</span></div>`;
 
@@ -336,7 +344,10 @@ function renderPositions(me, points) {
   });
 
   const myIndex = me ? list.findIndex((e) => e.name === me.name) : -1;
-  html += windowRows(positionIndices(list.length, myIndex), (i) => {
+  // lider da classe do piloto: o primeiro da fila que e da mesma classe
+  const myClass = me && myIndex >= 0 ? keyOf(list[myIndex]) : null;
+  const classLeaderIndex = myClass == null ? -1 : list.findIndex((e) => keyOf(e) === myClass);
+  html += windowRows(positionIndices(list.length, myIndex, classLeaderIndex), (i) => {
     const e = list[i];
     // intervalo para o carro imediatamente a frente, de qualquer classe
     // com piloto em foco, a diferenca e em relacao a ele; sem foco, para o carro da frente
@@ -360,7 +371,7 @@ function renderPositions(me, points) {
       cell.cls,
       cls,
       pts,
-      dnf ? "—" : classPos.get(e.name) || "—"
+      !multiclass ? null : dnf ? "—" : classPos.get(e.name) || "—"
     );
   });
   document.getElementById("dtClasses").innerHTML = html;

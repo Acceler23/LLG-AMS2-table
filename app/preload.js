@@ -12,4 +12,12 @@ contextBridge.exposeInMainWorld("llgApp", {
     get: () => ipcRenderer.invoke("driver:get"),
     set: (patch) => ipcRenderer.invoke("driver:set", patch),
   },
+  // programas que abrem junto com o aplicativo (lista montada pelo usuario no painel)
+  companion: {
+    get: () => ipcRenderer.invoke("companion:get"),
+    add: () => ipcRenderer.invoke("companion:add"),
+    remove: (file) => ipcRenderer.invoke("companion:remove", file),
+    launch: (file) => ipcRenderer.invoke("companion:launch", file),
+    launchAll: () => ipcRenderer.invoke("companion:launchAll"),
+  },
 });

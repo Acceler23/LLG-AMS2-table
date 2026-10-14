@@ -23,6 +23,7 @@
       lmuClassNames: typeof LMU_CLASS_NAMES !== "undefined" ? LMU_CLASS_NAMES : {},
       accClassNames: typeof ACC_CLASS_NAMES !== "undefined" ? ACC_CLASS_NAMES : {},
       acClassNames: typeof AC_CLASS_NAMES !== "undefined" ? AC_CLASS_NAMES : {},
+      trackNames: typeof TRACK_NAMES !== "undefined" ? TRACK_NAMES : {},
     };
   }
 
@@ -144,14 +145,173 @@
   }
 
   // Caminhos a tentar para o logo de um piloto: equipe primeiro, depois carro.
-  function logoPaths(teamName, carName, localOverrides) {
+  // variant ("light" ou "dark", opcional): versao do logo para um fundo que
+  // faria o logo normal sumir. O arquivo tem o mesmo nome com o sufixo
+  // "__light" ou "__dark" antes da extensao (apex.png -> apex__light.png):
+  //   light = logo CLARO, para fundo escuro
+  //   dark  = logo ESCURO, para fundo claro
+  // A variante vem antes do logo normal na lista; se o arquivo nao existir, o
+  // carregador (shared/logos.js) cai no normal.
+  function logoPaths(teamName, carName, localOverrides, variant) {
     const carFile = carLogo(carName) || carLogoFromTeam(teamName);
     const teamFile = teamLogoFile(teamName, localOverrides);
-    return [teamFile ? `teams/${teamFile}` : null, carFile ? `cars/${carFile}` : null];
+    const team = teamFile ? `teams/${teamFile}` : null;
+    const car = carFile ? `cars/${carFile}` : null;
+    if (variant !== "light" && variant !== "dark") return [team, car];
+    const withSuffix = (file) => (file ? file.replace(/(\.[a-z0-9]+)?$/i, (ext) => `__${variant}${ext}`) : null);
+    return [withSuffix(team), team, withSuffix(car), car];
+  }
+
+  // Nome da pista para o cabecalho da tabela.
+  //   location / variation: como o jogo informa (ex: "Interlagos" / "GP",
+  //   "Kansai" / "", "ks_vallelunga" / "extended_circuit")
+  // TRACK_NAMES (drivers-config.js) troca o nome do jogo pelo nome de verdade:
+  // a chave pode ser so a pista ("Kansai") ou pista + tracado ("Kansai GP"),
+  // sem diferenciar maiusculas. Uma chave comecando com "*" vale para qualquer
+  // nome que CONTENHA aquele trecho ("*Daytona" pega "Daytona International
+  // Speedway Road Course"), sem diferenciar maiusculas nem acentos; serve para
+  // encurtar nomes compridos sem precisar saber o texto exato. As chaves exatas
+  // tem prioridade. Sem entrada na lista, o nome do jogo e so arrumado (sem
+  // "ks_", sem "_").
+  function trackDisplay(location, variation) {
+    const names = config().trackNames || {};
+    const lookup = (key) => {
+      const k = String(key || "").trim().toLowerCase();
+      if (!k) return null;
+      const hit = Object.keys(names).find((n) => n.trim().toLowerCase() === k);
+      return hit ? String(names[hit]) : null;
+    };
+    const tidy = (text) => {
+      const t = String(text || "").trim().replace(/^ks_/i, "").replace(/_+/g, " ").replace(/\s+/g, " ").trim();
+      // identificadores todos em minusculas (Assetto Corsa) ganham iniciais maiusculas
+      return t && t === t.toLowerCase() ? t.replace(/\b[a-z]/g, (c) => c.toUpperCase()) : t;
+    };
+    const plain = (text) =>
+      String(text || "")
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "")
+        .toLowerCase();
+    // chaves com "*": a primeira da lista cujo trecho aparece no nome
+    const contains = (text) => {
+      const hay = plain(text);
+      if (!hay.trim()) return null;
+      const hit = Object.keys(names).find((n) => {
+        const key = n.trim();
+        if (!key.startsWith("*")) return false;
+        const needle = plain(key.slice(1)).trim();
+        return needle && hay.includes(needle);
+      });
+      return hit ? String(names[hit]) : null;
+    };
+    const loc = String(location || "").trim();
+    const lay = String(variation || "").trim();
+    const full = lay ? lookup(`${loc} ${lay}`) : null;
+    if (full != null) return { name: full, layout: "" };
+    let mapped = lookup(loc);
+    if (mapped == null) mapped = contains(loc);
+    const name = mapped != null ? mapped : tidy(loc);
+    const layout = tidy(lay);
+    return { name, layout: layout && layout.toLowerCase() !== name.toLowerCase() ? layout : "" };
+  }
+
+  // ---- etapa da temporada (RLT) que corresponde a pista do jogo ----
+  // Texto simplificado para comparar nomes de pista: sem acento, sem
+  // pontuacao, sem ano no fim ("interlagos.scb.2011" -> "interlagos scb").
+  function trackKey(text) {
+    return String(text || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\b(19|20)\d\d\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  // Dois nomes batem se sao iguais ou se um contem o outro em palavras
+  // inteiras ("interlagos" e "interlagos scb"; "nurburgring" e "nurburgring vedool").
+  function sameTrack(a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    return ` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `);
+  }
+
+  // Procura, nas etapas da temporada, a que acontece na pista do jogo.
+  //   events:   rltConfig.events
+  //   names:    nomes da pista no jogo (o que o jogo manda, o do
+  //             track-names.js, pista + tracado...)
+  //   nowMs:    agora, para desempatar quando a pista aparece em mais de uma etapa
+  // Entre as que batem, vale a etapa mais perto de hoje, de preferencia uma
+  // que ainda nao foi concluida. Sem nenhuma, devolve null.
+  function matchEvent(events, names, nowMs) {
+    const mine = (names || []).map(trackKey).filter(Boolean);
+    if (!mine.length) return null;
+    const hits = (events || []).filter((e) => {
+      const theirs = [e.trackName, e.name, e.circuitOrigin, e.uniqueName].map(trackKey).filter(Boolean);
+      return theirs.some((t) => mine.some((m) => sameTrack(t, m)));
+    });
+    if (!hits.length) return null;
+    const distance = (e) => {
+      const t = Date.parse(e.eventDate || "");
+      return Number.isNaN(t) ? Infinity : Math.abs(t - nowMs);
+    };
+    const done = (e) => (String(e.completedStatus || "").toLowerCase() === "completed" ? 1 : 0);
+    return hits.slice().sort((a, b) => done(a) - done(b) || distance(a) - distance(b) || (a.round || 0) - (b.round || 0))[0];
+  }
+
+  // Pais como o RLT informa (em ingles) -> portugues. O que nao estiver aqui
+  // aparece como veio.
+  const COUNTRIES_PT = {
+    brazil: "Brasil", argentina: "Argentina", "united states": "Estados Unidos", "united states of america": "Estados Unidos", usa: "Estados Unidos", canada: "Canadá", mexico: "México",
+    germany: "Alemanha", italy: "Itália", france: "França", spain: "Espanha", portugal: "Portugal", belgium: "Bélgica", netherlands: "Holanda",
+    "united kingdom": "Reino Unido", uk: "Reino Unido", "great britain": "Reino Unido", england: "Inglaterra", austria: "Áustria", hungary: "Hungria",
+    monaco: "Mônaco", switzerland: "Suíça", "czech republic": "República Tcheca", turkey: "Turquia", russia: "Rússia", japan: "Japão", china: "China",
+    australia: "Austrália", "south africa": "África do Sul", bahrain: "Bahrein", "saudi arabia": "Arábia Saudita", "united arab emirates": "Emirados Árabes",
+    uae: "Emirados Árabes", qatar: "Catar", singapore: "Singapura", malaysia: "Malásia", azerbaijan: "Azerbaijão", uruguay: "Uruguai", chile: "Chile",
+  };
+
+  // Arquivo da bandeira no repositorio de imagens (pasta country/): o nome do
+  // pais como o RLT informa, em minusculas, com "_" no lugar dos espacos.
+  function flagFile(country) {
+    const slug = String(country || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    return slug ? `country/${slug}.png` : null;
+  }
+
+  // Numero da bateria (corrida 1, 2... ou quali 1, 2...) para o cabecalho.
+  //   heats:    baterias daquele tipo na etapa, em ordem, com `completed`
+  //             (resultado ja lancado no RLT)
+  //   override: escolha do painel. null/undefined = automatico; 0 = sem
+  //             numero; outro numero = essa bateria
+  // No automatico vale a primeira bateria ainda sem resultado; se todas ja
+  // tem, a ultima. Etapa com uma bateria so (ou sem etapa) fica sem numero.
+  function heatNumber(heats, override) {
+    if (override != null && override !== "") {
+      const n = Math.floor(Number(override));
+      return n > 0 ? n : null;
+    }
+    const list = heats || [];
+    if (list.length <= 1) return null;
+    const next = list.findIndex((h) => !(h && h.completed));
+    return next === -1 ? list.length : next + 1;
+  }
+
+  function countryName(country) {
+    const text = String(country || "").trim();
+    return COUNTRIES_PT[text.toLowerCase()] || text;
   }
 
   return {
     setConfig,
+    trackDisplay,
+    matchEvent,
+    countryName,
+    flagFile,
+    heatNumber,
     formatClassName,
     hashColor,
     classColor,

@@ -30,6 +30,10 @@ const ignore = [
   /^\/SharedMemory_AMS2\.h$/,
   /^\/start\.bat$/,
   /^\/app\/build\.mjs$/,
+  // imagem original do icone e o script que gera app/icon.ico e app/icon.png
+  /^\/icon\.png$/,
+  /^\/app\/make-icon\.ps1$/,
+  /^\/\.github($|\/)/,
   /^\/overlay\/assets\/\.git($|\/)/,
   /\.log$/,
 ];
@@ -54,6 +58,8 @@ const [outDir] = await packager({
   overwrite: true,
   asar: false,
   prune: true,
+  // icone do .exe (app/icon.ico, gerado por app/make-icon.ps1 a partir do icon.png)
+  icon: path.join(root, "app", "icon.ico"),
   ignore,
 });
 
@@ -80,7 +86,7 @@ fs.writeFileSync(
     "estar em modo janela sem bordas (em tela cheia exclusiva a janela nao aparece).",
     "",
     "Cores, logos e tabela de pontos: edite resources\\app\\overlay\\drivers-config.js",
-    "e reabra o programa.",
+    "e reabra o programa. Nomes de pista do cabecalho: resources\\app\\overlay\\track-names.js",
     "",
     "Na primeira vez o Windows pode avisar que o aplicativo e desconhecido",
     "(SmartScreen), porque ele nao e assinado. Clique em \"Mais informacoes\" e",

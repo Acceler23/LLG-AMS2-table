@@ -202,3 +202,30 @@ test("carro levado para o box depois da bandeirada nao ganha uma parada", () => 
   const p = rs.apply(payload(5, [Object.assign({}, car, { raceState: 3, pitMode: 4, speedMs: 0 })]));
   assert.equal(byName(p, "A").pit.stops, 0);
 });
+
+test("tempo de stint: conta desde a largada, zera no box e recomeca na saida", () => {
+  const { clock, rs } = setup();
+  const car = { name: "A", position: 1, speedMs: 50, lapsCompleted: 5, currentLap: 6 };
+  const pitOf = (extra) => byName(rs.apply(payload(5, [Object.assign({}, car, extra)])), "A").pit;
+  pitOf();
+  clock.t += 12 * 60000; // 12 minutos de corrida
+  assert.equal(pitOf().stintMs, 12 * 60000);
+  clock.t += 1000;
+  assert.equal(pitOf({ pitMode: 2 }).stintMs, 0); // no box
+  clock.t += 40000;
+  assert.equal(pitOf().stintMs, 0); // acabou de sair: stint novo
+  clock.t += 7 * 60000;
+  assert.equal(pitOf().stintMs, 7 * 60000);
+  // bandeirada: o tempo para de contar
+  clock.t += 60000;
+  assert.equal(pitOf({ raceState: 3 }).stintMs, 8 * 60000);
+  clock.t += 5 * 60000;
+  assert.equal(pitOf({ raceState: 3 }).stintMs, 8 * 60000);
+});
+
+test("tempo de stint so existe em corrida", () => {
+  const { clock, rs } = setup();
+  rs.apply(payload(3, [{ name: "A", position: 1, speedMs: 50 }]));
+  clock.t += 10 * 60000;
+  assert.equal(byName(rs.apply(payload(3, [{ name: "A", position: 1, speedMs: 50 }])), "A").pit.stintMs, 0);
+});

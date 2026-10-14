@@ -64,7 +64,13 @@ function tyreBadges(entry) {
 
 // A pagina "Pneus" da coluna da direita so entra no rodizio quando o jogo
 // informa o composto. No LMU os pneus ja ficam ao lado da tabela.
+// Ganho de posicoes, paradas e stint so fazem sentido em corrida: em treino e
+// classificacao essas paginas ficam fora do rodizio.
+const RACE_ONLY_MODES = ["Posições", "Paradas", "Stint"];
+
 function rightModeAvailable(mode) {
+  // (a volta de formacao, estado 4, ja faz parte da corrida)
+  if (RACE_ONLY_MODES.includes(mode)) return isRaceSession() || Number(latestSessionState) === 4;
   if (mode !== "Pneus") return true;
   return latestGame !== "lmu" && latestStandings.some((e) => e && (e.tyreFront || e.tyreRear));
 }
@@ -100,9 +106,9 @@ function renderEnergyCell(cell, entry) {
 }
 
 const LMU_SIDE_WIDTH = 70; // px, igual ao .lmu-side do CSS
+const LMU_TYRE_ONLY_WIDTH = 30; // px, igual ao .lmu-side.tyre-only do CSS
 const LMU_SIDE_GAP = 2;
 const lmuSideEls = [];
-let lmuSideHead = null;
 
 function lmuSideElement(i) {
   while (lmuSideEls.length <= i) {
@@ -118,8 +124,12 @@ function lmuSideElement(i) {
 // Posiciona pneus e VE ao lado de cada linha de piloto que esta na tela.
 // Devolve a largura ocupada ao lado da tabela (0 fora do LMU), para o
 // relogio da volta mais rapida ficar depois dela.
-function updateLmuSide(standings) {
+// sideOffset: largura da velocidade dos carros em disputa, que fica entre a
+// tabela e o pneu dessas linhas. Devolve a largura total ocupada ao lado da
+// tabela (velocidade + pneus).
+function updateLmuSide(standings, sideOffset) {
   const table = document.getElementById("timing-table");
+  const offset = sideOffset || 0;
   const show = latestGame === "lmu" && !showingStandings();
   const rows = [];
   if (show && table) {
@@ -129,11 +139,16 @@ function updateLmuSide(standings) {
   }
   const byName = new Map((standings || []).map((e) => [e.name, e]));
   const top0 = table ? table.offsetTop + table.clientTop : 0;
-  const left = table
-    ? CLOCK_SIDE === "left"
-      ? table.offsetLeft - LMU_SIDE_WIDTH - LMU_SIDE_GAP
-      : table.offsetLeft + table.offsetWidth + LMU_SIDE_GAP
-    : 0;
+  // Na pagina de disputas fica so o pneu (sem a VE), depois da velocidade.
+  const tyreOnly = battleActive();
+  const sideWidth = tyreOnly ? LMU_TYRE_ONLY_WIDTH : LMU_SIDE_WIDTH;
+  // So as linhas em disputa tem a velocidade antes do pneu; nas outras o pneu
+  // fica encostado na tabela, sem buraco.
+  const leftFor = (name) => {
+    if (!table) return 0;
+    const o = offset && battleNames.has(name) ? offset : 0;
+    return CLOCK_SIDE === "left" ? table.offsetLeft - o - sideWidth - LMU_SIDE_GAP : table.offsetLeft + table.offsetWidth + o + LMU_SIDE_GAP;
+  };
 
   let used = 0;
   rows.forEach((row) => {
@@ -144,28 +159,13 @@ function updateLmuSide(standings) {
     renderEnergyCell(el.querySelector(".energy"), entry);
     el.style.top = `${top0 + row.offsetTop}px`;
     el.style.height = `${row.offsetHeight}px`;
-    el.style.left = `${left}px`;
+    el.style.left = `${leftFor(entry.name)}px`;
+    el.classList.toggle("tyre-only", tyreOnly);
     el.classList.add("visible");
   });
   for (let i = used; i < lmuSideEls.length; i++) lmuSideEls[i].classList.remove("visible");
 
-  // titulos "Pneu" e "VE", na altura do cabecalho da tabela
-  if (!lmuSideHead) {
-    lmuSideHead = document.createElement("div");
-    lmuSideHead.className = "lmu-side head";
-    lmuSideHead.innerHTML = '<span class="tyre">Pneu</span><span class="energy">VE</span>';
-    document.body.appendChild(lmuSideHead);
-  }
-  const header = table ? table.querySelector(".header") : null;
-  if (used > 0 && header) {
-    lmuSideHead.style.top = `${top0 + header.offsetTop}px`;
-    lmuSideHead.style.height = `${header.offsetHeight}px`;
-    lmuSideHead.style.left = `${left}px`;
-    lmuSideHead.classList.add("visible");
-  } else {
-    lmuSideHead.classList.remove("visible");
-  }
-  return used > 0 ? LMU_SIDE_WIDTH + LMU_SIDE_GAP : 0;
+  return used > 0 ? offset + sideWidth + LMU_SIDE_GAP : 0;
 }
 
 // Degrade suave com a cor principal da equipe (RLT) no fundo da linha.
@@ -311,13 +311,13 @@ function currentPageMode(standings) {
 // Alturas em px. Precisam bater com timing-table.css:
 //   linha  = 43 (min-height) + 3 (border-top) + 3 (gap do #rows) = 49
 //   classe = 46 (mesma altura da linha) + 3 (gap)                = 49
-// Com 49 px por linha cabem 20 linhas em 1080 px (total real: 1063 px).
+// Com 49 px por linha cabem 20 linhas em 1080 px (total real: 1075 px).
 const MAX_TABLE_H = 1080;
-const TITLE_H = 48;
-const COL_HEADER_H = 36;
+const TITLE_H = 62; // linha de cima do cabecalho (.title-bar no CSS)
+const COL_HEADER_H = 32; // linha de baixo do cabecalho (.header no CSS)
 const ROW_H = 49;
 const CLASS_HDR_H = 49;
-const SAFETY_H = 16;
+const SAFETY_H = 6; // bordas da tabela (com o cabecalho de 94 px, 20 linhas dao 1075 px)
 let rotateTick = 0;
 const ROTATE_MS = 10000;
 
@@ -442,7 +442,7 @@ function resetSessionLocalState() {
   gapTracker.reset();
   gapSmoother.reset();
   garageSince.clear();
-  sectorState.clear();
+  sectorTracker.reset();
   lastDisplayPos.clear();
 }
 
@@ -574,6 +574,7 @@ function handleStandings(payload) {
 
   let standings = raw.filter((e) => !isSafetyCar(e) && !isObserver(e));
   gapTracker.update(standings, (!Array.isArray(payload) && payload.ts) || Date.now());
+  sectorTracker.update(standings, (e) => groupKey(e, standings), Date.now());
   if (rltMatcher) rltMatcher.prime(standings.map((e) => e.name));
   standings = mergeDisconnectedDrivers(standings);
   updateStablePlayer(standings);
@@ -596,8 +597,25 @@ function checkBuildId(id) {
   else if (id !== overlayBuildId) location.reload();
 }
 
+// A pagina de disputas e ligada e desligada aqui na tabela (tecla 9, fim da
+// corrida, safety car). O driver card precisa saber para trocar o que mostra,
+// entao a tabela avisa pelo WebSocket quando o estado muda e repete de tempos
+// em tempos (um card aberto depois tambem fica sabendo).
+let wsSocket = null;
+let battleStateSent = null;
+
+function announceBattleState(force) {
+  const active = battleActive();
+  if (!force && active === battleStateSent) return;
+  if (!wsSocket || wsSocket.readyState !== 1) return;
+  battleStateSent = active;
+  wsSocket.send(JSON.stringify({ type: "command", name: "overlay.battleState", payload: { active } }));
+}
+setInterval(() => announceBattleState(true), 2000);
+
 function connect() {
   const socket = new WebSocket(WS_URL);
+  wsSocket = socket;
   socket.addEventListener("message", (event) => {
     let msg;
     try {
@@ -650,7 +668,7 @@ function applyOverlayCommand(name, payload = {}) {
   } else if (name === "overlay.toggleStandings") {
     standingsView = !standingsView;
   } else if (name === "overlay.setStandings") {
-    // usado pela alternancia automatica do servidor (posicoes <-> pontuacao)
+    // define a tela direto (posicoes ou pontuacao), em vez de alternar
     standingsView = !!payload.value;
   } else if (name === "overlay.resetRace") {
     resetSessionLocalState();
@@ -667,6 +685,15 @@ function applyOverlayCommand(name, payload = {}) {
   } else if (name === "overlay.setTeamTint") {
     setTeamTint(payload.value, true);
     return;
+  } else if (name === "overlay.setHeat") {
+    setHeatOverride(payload);
+    if (!showingStandings()) document.getElementById("sessionLabel").textContent = headerSessionLabel(document.getElementById("sessionLabel").textContent);
+  } else if (name === "overlay.setBattleScope") {
+    setBattleScope(payload.value);
+  } else if (name === "overlay.toggleBattles") {
+    // pagina de disputas: so liga em corrida e sem safety car
+    if (!battleMode && (!isRaceSession() || latestScOut)) return;
+    battleMode = !battleMode;
   } else if (name === "overlay.setTeamLogo") {
     setTeamLogoOverride(payload.teamName, payload.file || null);
   } else {
@@ -693,9 +720,110 @@ function formatClock(totalSeconds) {
     : `${m}:${String(s).padStart(2, "0")}`;
 }
 
+// Nomes curtos da sessao para o bloco preto do cabecalho.
+const HEADER_SESSION_LABELS = { 1: "TREINO", 2: "TESTE", 3: "QUALI", 4: "FORMAÇÃO", 5: "CORRIDA", 6: "TIME ATTACK" };
+const GAME_TITLES = { ams2: "Automobilista 2", lmu: "Le Mans Ultimate", acc: "Assetto Corsa Competizione", ac: "Assetto Corsa" };
+let latestTrack = { location: "", variation: "" };
+let latestEvent = null; // etapa do RLT que corresponde a pista do jogo (ou null)
+
+// Bateria mostrada no cabecalho ("CORRIDA 2", "QUALI 1"), escolhida no painel:
+// null = automatico (pelo que ja tem resultado lancado no RLT), 0 = sem
+// numero, outro numero = essa bateria.
+const HEAT_KEY = "heatOverride";
+let heatOverride = { race: null, quali: null };
+try {
+  const savedHeat = JSON.parse(localStorage.getItem(HEAT_KEY) || "null");
+  if (savedHeat) heatOverride = { race: savedHeat.race != null ? savedHeat.race : null, quali: savedHeat.quali != null ? savedHeat.quali : null };
+} catch (_) {}
+
+function setHeatOverride(payload) {
+  const clean = (v) => (v == null || v === "" || Number.isNaN(Number(v)) ? null : Math.max(0, Math.floor(Number(v))));
+  heatOverride = { race: clean(payload && payload.race), quali: clean(payload && payload.quali) };
+  try {
+    localStorage.setItem(HEAT_KEY, JSON.stringify(heatOverride));
+  } catch (_) {}
+}
+
+// Nome da sessao para o cabecalho, com o numero da bateria em corrida e quali.
+function headerSessionLabel(fallback) {
+  const state = Number(latestSessionState);
+  const base = HEADER_SESSION_LABELS[state] || fallback;
+  if (state !== 5 && state !== 3) return base;
+  const heats = latestEvent ? (state === 5 ? latestEvent.races : latestEvent.qualifications) : null;
+  const n = LLGDisplay.heatNumber(heats, state === 5 ? heatOverride.race : heatOverride.quali);
+  return n ? `${base} ${n}` : base;
+}
+
+// Faixa colorida e bloco da pista. Com temporada aplicada, a faixa mostra o
+// nome dela ("Campeonato - Temporada 2" vira duas linhas); sem temporada, o
+// HEADER_TITLE do drivers-config.js e o nome do jogo.
+function updateHeaderBrand() {
+  const table = document.getElementById("timing-table");
+  if (typeof HEADER_COLOR !== "undefined" && HEADER_COLOR) table.style.setProperty("--header-color", HEADER_COLOR);
+  let title = typeof HEADER_TITLE !== "undefined" && HEADER_TITLE ? HEADER_TITLE : "Liga Let's Go";
+  let subtitle = GAME_TITLES[latestGame] || "";
+  const season = rltConfig && rltConfig.seasonName ? String(rltConfig.seasonName).trim() : "";
+  if (season) {
+    const parts = season.split(/\s+[-–—|]\s+/);
+    title = parts[0];
+    subtitle = parts.slice(1).join(" - ");
+  }
+
+  // Pista: o nome do jogo, arrumado pelo track-names.js. Com temporada
+  // aplicada, se alguma etapa do calendario do RLT for nessa pista, vale o
+  // nome que esta no RLT, o pais na segunda linha e o numero da etapa na faixa.
+  const track = LLGDisplay.trackDisplay(latestTrack.location, latestTrack.variation);
+  const event = season
+    ? LLGDisplay.matchEvent(
+        rltConfig.events,
+        [latestTrack.location, `${latestTrack.location} ${latestTrack.variation}`, track.name, `${track.name} ${track.layout}`],
+        Date.now()
+      )
+    : null;
+  latestEvent = event;
+  let flag = null;
+  if (event) {
+    track.name = event.trackName || event.name || track.name;
+    const country = LLGDisplay.countryName(event.country);
+    if (country) {
+      track.layout = country;
+      flag = LLGDisplay.flagFile(event.country);
+    }
+    if (event.round != null) subtitle = [subtitle, `Etapa ${event.round}`].filter(Boolean).join(" · ");
+  }
+  // bandeira do pais (repositorio de imagens, pasta country/), ao lado do nome
+  const flagEl = document.getElementById("trackFlag");
+  if (flag) logoLoader.load(flagEl, [flag]);
+  else logoLoader.hide(flagEl);
+  const titleEl = document.getElementById("headerTitle");
+  titleEl.textContent = title;
+  // nome comprido: letra menor para caber na faixa sem cortar
+  titleEl.style.fontSize = title.length > 34 ? "13px" : title.length > 28 ? "15px" : title.length > 22 ? "18px" : "";
+  document.getElementById("headerSubtitle").textContent = subtitle;
+
+  document.getElementById("trackName").textContent = track.name;
+  document.getElementById("trackLayout").textContent = track.layout;
+  document.querySelector(".tb-country").classList.toggle("empty", !track.layout && !flag);
+  document.getElementById("trackTag").classList.toggle("no-track", !track.name);
+  updateTrackTag();
+}
+
+// A etiqueta da pista fica colada na borda direita da tabela, na altura da
+// primeira linha do cabecalho. A tabela pode mudar de lugar (?clock=left).
+function updateTrackTag() {
+  const table = document.getElementById("timing-table");
+  const tag = document.getElementById("trackTag");
+  if (!table || !tag) return;
+  tag.style.top = `${table.offsetTop}px`;
+  tag.style.left = `${table.offsetLeft + table.offsetWidth}px`;
+}
+
 function updateSessionHeader(session) {
   if (!session) return;
-  const label = latestSessionLabel || SESSION_LABELS[session.state] || session.label || "CORRIDA";
+  latestTrack = { location: session.trackLocation || "", variation: session.trackVariation || "" };
+  stintLimitMin = Number(session.stintLimitMin) || 0;
+  updateHeaderBrand(); // define a etapa (latestEvent), usada no numero da bateria
+  const label = headerSessionLabel(latestSessionLabel || SESSION_LABELS[session.state] || session.label || "CORRIDA");
   document.getElementById("sessionLabel").textContent = label;
 
   const timerEl = document.getElementById("sessionTimer");
@@ -722,6 +850,7 @@ function updateSessionHeader(session) {
 
   const table = document.getElementById("timing-table");
   if (table) table.classList.toggle("sc-out", !!session.scOut);
+  latestScOut = !!session.scOut;
 }
 
 // Nome e cor de classe e arquivos de logo: regras compartilhadas com o
@@ -832,9 +961,11 @@ function getStablePlayerClass(standings) {
 const logoLoader = LLGLogos.createLoader("assets");
 
 // Logo da linha: o da equipe se existir, senao o da montadora.
-function applyLogo(img, teamName, carName) {
+// variant: "light" ou "dark" para pedir a versao do logo feita para aquele
+// fundo (ver logoPaths em shared/display.js); sem ela, o logo normal.
+function applyLogo(img, teamName, carName, variant) {
   if (!img) return;
-  logoLoader.load(img, LLGDisplay.logoPaths(teamName, carName, teamLogoOverrides));
+  logoLoader.load(img, LLGDisplay.logoPaths(teamName, carName, teamLogoOverrides, variant));
 }
 
 let teamLogoOverrides = {};
@@ -963,7 +1094,7 @@ function rightColumnValue(entry, change, bestFastestMs, aheadFastestMs) {
   } else if (mode === "Paradas") {
     result = { text: String(pit.stops), cls: "" };
   } else if (mode === "Stint") {
-    result = { text: String(pit.stintLaps), cls: "" };
+    result = stintValue(pit);
   } else if (mode === "VMax") {
     result = { text: entry.maxSpeedKmh != null ? `${Math.round(entry.maxSpeedKmh)}` : "-", cls: "" };
   } else {
@@ -980,108 +1111,41 @@ function rightColumnValue(entry, change, bestFastestMs, aheadFastestMs) {
   return result;
 }
 
+// Coluna "Stint". Normalmente e o numero de voltas desde a ultima parada. No
+// ACC, com tempo maximo de stint definido no painel (aba ACC), passa a ser um
+// cronometro do stint ("23:41"), contando desde a largada ou a ultima saida do
+// box: amarelo nos ultimos 5 minutos antes do limite, vermelho quando estoura.
+let stintLimitMin = 0;
+const STINT_WARN_MIN = 5;
+
+// milissegundos -> "m:ss" (ou "h:mm:ss" depois de uma hora)
+function formatStopwatch(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = String(total % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
+function stintValue(pit) {
+  if (!(stintLimitMin > 0) || latestGame !== "acc" || typeof pit.stintMs !== "number") {
+    return { text: String(pit.stintLaps), cls: "" };
+  }
+  const minutes = pit.stintMs / 60000;
+  const cls = minutes >= stintLimitMin ? "stint-over" : minutes >= stintLimitMin - STINT_WARN_MIN ? "stint-warn" : "";
+  return { text: formatStopwatch(pit.stintMs), cls: `stint-clock ${cls}`.trim() };
+}
+
 const frozenGaps = new Map(); // nome|modo -> { text, cls }
 const garageSince = new Map();
-const sectorState = new Map();
+// Parciais de cada carro e a cor de cada uma: mesma regra do driver card
+// (shared/sectors.js). Roxo melhor da classe, verde melhor do piloto, amarelo
+// pior, vermelho volta invalidada.
+const sectorTracker = LLGSectors.createSectorTracker();
 const lastDisplayPos = new Map();
 
 function isOutLap(entry) {
   return isInPit(entry) || isExitingPit(entry) || pitInfo(entry).outLap;
-}
-
-function updateSectorDisplay(entry, purpleOwners) {
-  const name = entry.name;
-  let st = sectorState.get(name);
-  if (!st) {
-    st = {
-      colors: [null, null, null],
-      lastLap: entry.currentLap || 0,
-      lastSecN: 0,
-      final: [0, 0, 0],
-      committed: [false, false, false],
-      clearAt: 0,
-    };
-    sectorState.set(name, st);
-  }
-
-  const now = Date.now();
-  const lap = entry.currentLap || 0;
-  // AMS2 mCurrentSector: 0=S1, 1=S2, 2=S3 (UNSET=-1)
-  let raw = entry.currentSector;
-  if (raw == null || raw < 0) raw = st.lastSecN > 0 ? st.lastSecN - 1 : 0;
-  const secN = raw + 1; // 1,2,3
-  const cur = [entry.sector1Ms || 0, entry.sector2Ms || 0, entry.sector3Ms || 0];
-  const best = [entry.bestSector1Ms, entry.bestSector2Ms, entry.bestSector3Ms];
-
-  function colorFor(i, timeMs) {
-    if (!(timeMs > 0)) return null;
-    if (purpleOwners[i] === name) return "purple";
-    if (best[i] > 0 && timeMs <= best[i]) return "green";
-    return "yellow";
-  }
-
-  function commit(i, timeMs) {
-    if (st.committed[i] || !(timeMs > 0)) return;
-    st.colors[i] = colorFor(i, timeMs);
-    st.committed[i] = true;
-    st.final[i] = timeMs;
-  }
-
-  // nova volta → fecha S3 e agenda branco em 5s
-  if (lap > st.lastLap) {
-    if (!st.committed[2]) commit(2, st.final[2] || cur[2]);
-    st.lastLap = lap;
-    st.clearAt = now + 5000;
-    st.committed = [false, false, false];
-    st.final = [0, 0, 0];
-    st.lastSecN = secN;
-  }
-
-  if (st.clearAt && now >= st.clearAt) {
-    st.colors = [null, null, null];
-    st.clearAt = 0;
-  }
-
-  if (entry.lapInvalidated) {
-    st.colors = ["red", "red", "red"];
-    st.clearAt = 0;
-    return st.colors;
-  }
-
-  // 0→1 (S1→S2): fecha S1 | 1→2 (S2→S3): fecha S2 | 2→0 (S3→S1): fecha S3
-  if (secN !== st.lastSecN && secN >= 1 && secN <= 3) {
-    if (st.lastSecN === 1 && secN === 2) commit(0, cur[0] || st.final[0]);
-    else if (st.lastSecN === 2 && secN === 3) commit(1, cur[1] || st.final[1]);
-    else if (st.lastSecN === 3 && secN === 1) commit(2, cur[2] || st.final[2]);
-    st.lastSecN = secN;
-  }
-
-  // guarda tempos finais só de setores já concluídos
-  if (secN >= 2 && cur[0] > 0) st.final[0] = cur[0];
-  if (secN >= 3 && cur[1] > 0) st.final[1] = cur[1];
-  if (secN === 3 && cur[2] > 0) st.final[2] = cur[2];
-
-  return st.colors;
-}
-
-function computePurpleOwners(standings, isClassMode) {
-  const owners = [null, null, null];
-  const best = [Infinity, Infinity, Infinity];
-  standings.forEach((e) => {
-    if (e.lapInvalidated) return;
-    if (e.pitMode === 1 || e.pitMode === 2 || e.pitMode === 3 || e.pitMode === 4 || e.pitMode === 5) return;
-    if (isOutLap(e)) return;
-    const st = sectorState.get(e.name);
-    for (let i = 0; i < 3; i++) {
-      if (!st || !st.committed[i]) continue;
-      const v = (st.final && st.final[i]) || 0;
-      if (v > 0 && v < best[i]) {
-        best[i] = v;
-        owners[i] = e.name;
-      }
-    }
-  });
-  return owners;
 }
 
 function isInPit(entry) {
@@ -1147,6 +1211,10 @@ function formatGap(entry, change, aheadFastestMs) {
 
   if (firstLapWithoutGap(entry)) return formatPosChange(change);
 
+  // o lider (geral ou da classe, conforme a pagina) nao tem intervalo:
+  // mostra a volta em que ele esta
+  if (!entry._ahead || entry._ahead === entry) return { text: `Volta ${entry.currentLap || (entry.lapsCompleted || 0) + 1}`, cls: "" };
+
   return raceGap(entry, entry._ahead);
 }
 
@@ -1169,7 +1237,10 @@ function paginateFixedTop(ordered) {
   const rest = ordered.slice(fixedCount);
   const extraSlots = Math.max(0, maxSlots - fixedCount);
   if (extraSlots <= 0 || rest.length === 0) return fixed;
-  const rotated = pickRotated(rest, rotateTick, extraSlots).map((item) => ({ ...item, rotating: true }));
+  // pagina de disputas: se ha disputa nesta parte, ela fica travada nela
+  const lock = battleActive() ? LLGBattles.battleWindowStart(rest.map(isBattleItem), extraSlots, rotateTick) : null;
+  const picked = lock !== null ? rest.slice(lock, lock + extraSlots) : pickRotated(rest, rotateTick, extraSlots);
+  const rotated = picked.map((item) => ({ ...item, rotating: true }));
   while (rotated.length < extraSlots) rotated.push({ type: "spacer" });
   return fixed.concat(rotated);
 }
@@ -1209,7 +1280,9 @@ function paginateByClass(classKeys, groups, toItems, headerFor) {
 
     sorted.slice(0, fixedCount).forEach((item) => list.push(item));
     if (extraSlots > 0) {
-      const page = pickRotated(sorted.slice(fixedCount), rotateTick, extraSlots, maxPages);
+      const restOfClass = sorted.slice(fixedCount);
+      const lock = battleActive() ? LLGBattles.battleWindowStart(restOfClass.map(isBattleItem), extraSlots, rotateTick) : null;
+      const page = lock !== null ? restOfClass.slice(lock, lock + extraSlots) : pickRotated(restOfClass, rotateTick, extraSlots, maxPages);
       page.forEach((item) => list.push({ ...item, rotating: true }));
       for (let n = page.length; n < extraSlots; n++) list.push({ type: "spacer" });
     }
@@ -1500,10 +1573,11 @@ function renderStandings(standings) {
   const sessionLabel = document.getElementById("sessionLabel");
   const timerEl = document.getElementById("sessionTimer");
 
-  const seasonName = (rltConfig && rltConfig.seasonName) || "STANDINGS";
-  sessionLabel.textContent = "PONTUAÇÃO";
-  timerEl.textContent = seasonName;
-  timerEl.style.fontSize = seasonName.length > 22 ? "22px" : "26px";
+  // tela de pontuacao: o nome da temporada ja esta na faixa colorida, e o
+  // relogio da sessao some
+  sessionLabel.textContent = "PONTOS";
+  timerEl.textContent = "";
+  updateHeaderBrand();
   pageLabel.textContent = currentPageLabel(standings);
   const colMode = STANDINGS_COLUMN_MODES[standingsColumnIndex];
   rightLabel.textContent = colMode;
@@ -1622,7 +1696,9 @@ function renderStandings(standings) {
       el = fresh;
     }
 
-    const pos = item.displayPosition != null ? item.displayPosition : row.position;
+    // 999 = piloto do lineup que ainda nao pontuou: sem posicao no campeonato
+    const rawPos = item.displayPosition != null ? item.displayPosition : row.position;
+    const pos = rawPos >= 999 ? "–" : rawPos;
     const clr = row.color || classColor(row.classUniqueName);
     el.style.borderTopColor = clr || "";
     applyTeamTint(el, row.teamPrimaryColor);
@@ -1682,6 +1758,161 @@ function renderStandings(standings) {
 
 // Relogio da volta mais rapida: fica ao lado da tabela, na altura da linha do
 // piloto que tem a melhor volta da corrida. So aparece em corrida.
+// ---- pagina de disputas (tecla 9, so em corrida) ----
+// Destaca os carros que ficam pelo menos 10 s colados no da frente
+// (shared/battles.js), mostra a velocidade deles ao lado da tabela e trava a
+// parte rotativa da tabela onde houver disputa.
+let battleMode = false;
+let battleNames = new Set();
+let latestScOut = false; // safety car na pista (AMS2 e LMU informam)
+// Alcance da pagina, escolhido no painel:
+//   "all"   a tabela toda, com intervalo de 0,3 s
+//   "focus" so as disputas do piloto assistido, com intervalo de 0,5 s
+const BATTLE_SCOPES = { all: 0.3, focus: 0.5 };
+const BATTLE_SCOPE_KEY = "battleScope";
+let battleScope = "all";
+try {
+  // a escolha do painel sobrevive a um reload da overlay
+  const savedScope = localStorage.getItem(BATTLE_SCOPE_KEY);
+  if (savedScope && BATTLE_SCOPES[savedScope]) battleScope = savedScope;
+} catch (_) {}
+
+function setBattleScope(value) {
+  if (!BATTLE_SCOPES[value]) return;
+  battleScope = value;
+  try {
+    localStorage.setItem(BATTLE_SCOPE_KEY, value);
+  } catch (_) {}
+}
+
+// Para cada alcance, dois detectores, todos rodando a corrida toda: um pela
+// ordem geral (pagina Geral) e um pela ordem dentro de cada classe (paginas
+// por classe). Cada pagina usa o que combina com o intervalo que ela mostra.
+const battleDetectors = {};
+Object.keys(BATTLE_SCOPES).forEach((scope) => {
+  battleDetectors[scope] = {
+    overall: LLGBattles.createBattleDetector({ gap: BATTLE_SCOPES[scope] }),
+    byClass: LLGBattles.createBattleDetector({ gap: BATTLE_SCOPES[scope] }),
+  };
+});
+
+function battleActive() {
+  return battleMode && isRaceSession() && !showingStandings();
+}
+
+const isBattleItem = (item) => !!(item && item.type === "row" && item.entry && battleNames.has(item.entry.name));
+
+function updateBattles(standings) {
+  // a corrida acabou ou o safety car entrou: a pagina desliga sozinha (com o
+  // pelotao junto atras do safety car todo mundo estaria "em disputa")
+  if (!isRaceSession() || latestScOut) {
+    battleMode = false;
+    battleNames = new Set();
+    Object.values(battleDetectors).forEach((d) => {
+      d.overall.reset();
+      d.byClass.reset();
+    });
+    return;
+  }
+  // A deteccao roda a corrida toda, mesmo com a pagina desligada: como uma
+  // disputa leva 10 s para ser reconhecida, ao apertar 9 as que ja estao
+  // acontecendo aparecem na hora.
+  const now = Date.now();
+  const gapOf = (behind, ahead) => {
+    const g = gapTracker.gap(behind.name, ahead.name, trackLengthM);
+    return g && !g.laps ? g.sec : null;
+  };
+  // quem esta no box, terminou ou abandonou quebra a sequencia
+  const eligible = (e) => (isDnf(e) || e.raceState === 3 || (e.pitMode || 0) !== 0 || firstLapWithoutGap(e) ? null : e);
+  const sorted = (standings || []).slice().sort(sortRaceOrder);
+
+  // ordem geral: disputa entre posicoes seguidas na corrida toda
+  const overallOrder = sorted.map(eligible);
+
+  // por classe: disputa entre posicoes seguidas DENTRO da classe (a briga por
+  // posicao de verdade numa corrida multiclasse). As classes vao em sequencia,
+  // separadas por um buraco, para o ultimo de uma nao formar par com o
+  // primeiro da outra.
+  const byClass = new Map();
+  sorted.forEach((e) => {
+    const key = groupKey(e, standings);
+    if (!byClass.has(key)) byClass.set(key, []);
+    byClass.get(key).push(eligible(e));
+  });
+  const chained = [];
+  byClass.forEach((list) => {
+    if (chained.length) chained.push(null);
+    list.forEach((e) => chained.push(e));
+  });
+  const found = {};
+  Object.keys(battleDetectors).forEach((scope) => {
+    found[scope] = {
+      overall: battleDetectors[scope].overall.update(overallOrder, gapOf, now),
+      byClass: battleDetectors[scope].byClass.update(chained, gapOf, now),
+    };
+  });
+
+  if (!battleActive()) {
+    battleNames = new Set();
+    return;
+  }
+  const kind = currentPageMode(standings) === "Geral" ? "overall" : "byClass";
+  if (battleScope === "focus") {
+    // so as disputas em que o piloto assistido esta (com o da frente e o de tras)
+    const me = (standings || []).find((e) => isStablePlayer(e));
+    battleNames = me ? battleDetectors.focus[kind].namesWith(me.name) : new Set();
+  } else {
+    battleNames = found.all[kind];
+  }
+}
+
+// Velocidade dos carros em disputa, FORA da tabela, ao lado da linha de cada
+// um (como o relogio da volta mais rapida). sideOffset: largura ja ocupada ao
+// lado da tabela. Devolve a largura que esta coluna ocupa (0 se nao ha disputa
+// na tela).
+const BATTLE_SIDE_WIDTH = 66; // px, igual ao .battle-side do CSS
+const BATTLE_SIDE_GAP = 2;
+const battleSideEls = [];
+
+function updateBattleSide(standings, sideOffset) {
+  const table = document.getElementById("timing-table");
+  const rows = [];
+  if (table && battleActive() && battleNames.size) {
+    document.querySelectorAll("#rows > .row").forEach((el) => {
+      if (el.dataset.kind === "row" && battleNames.has(el.dataset.name)) rows.push(el);
+    });
+  }
+  const byName = new Map((standings || []).map((e) => [e.name, e]));
+  const offset = sideOffset || 0;
+  let used = 0;
+  rows.forEach((row) => {
+    const entry = byName.get(row.dataset.name);
+    if (!entry) return;
+    while (battleSideEls.length <= used) {
+      const el = document.createElement("div");
+      el.className = "battle-side";
+      document.body.appendChild(el);
+      battleSideEls.push(el);
+    }
+    const el = battleSideEls[used++];
+    const text = typeof entry.speedKmh === "number" ? `${Math.round(entry.speedKmh)}` : "–";
+    const html = `${text}<small>km/h</small>`;
+    if (el.dataset.html !== html) {
+      el.innerHTML = html;
+      el.dataset.html = html;
+    }
+    el.style.top = `${table.offsetTop + table.clientTop + row.offsetTop}px`;
+    el.style.height = `${row.offsetHeight}px`;
+    el.style.left =
+      CLOCK_SIDE === "left"
+        ? `${table.offsetLeft - offset - BATTLE_SIDE_WIDTH - BATTLE_SIDE_GAP}px`
+        : `${table.offsetLeft + table.offsetWidth + offset + BATTLE_SIDE_GAP}px`;
+    el.classList.add("visible");
+  });
+  for (let i = used; i < battleSideEls.length; i++) battleSideEls[i].classList.remove("visible");
+  return used > 0 ? BATTLE_SIDE_WIDTH + BATTLE_SIDE_GAP : 0;
+}
+
 // Na pagina Geral ha um relogio (melhor volta da corrida); nas paginas por
 // classe ha um por classe (melhor volta de cada classe).
 // Lado: direito por padrao; ?clock=left coloca a esquerda (a tabela anda
@@ -1722,7 +1953,9 @@ function updateFastLapClock(standings, sideOffset) {
   table.classList.toggle("clock-left", CLOCK_SIDE === "left");
 
   const rows = [];
-  if (!showingStandings() && isRaceSession()) {
+  // na pagina de disputas o relogio some: ali o foco e a briga, e ele ficaria
+  // colado na velocidade dos carros
+  if (!showingStandings() && isRaceSession() && !battleActive()) {
     const perClass = currentPageMode(standings) !== "Geral";
     const names = new Set(fastestLapHolders(standings, perClass).map((e) => e.name));
     // so as linhas na tela: o piloto pode estar numa pagina nao exibida
@@ -1749,9 +1982,18 @@ function updateFastLapClock(standings, sideOffset) {
 function render(standings) {
   // game-lmu: so abre espaco a esquerda no modo ?clock=left (ver CSS)
   document.getElementById("timing-table").classList.toggle("game-lmu", latestGame === "lmu" && !showingStandings());
+  updateBattles(standings); // antes de montar a tabela: define destaque e trava do rodizio
+  announceBattleState(false);
+  const table = document.getElementById("timing-table");
+  table.classList.toggle("battle-on", battleActive());
+  table.classList.toggle("battle-has", battleActive() && battleNames.size > 0);
   renderTable(standings);
-  // LMU: pneus e VE ao lado da tabela; o relogio fica depois deles
-  updateFastLapClock(standings, updateLmuSide(standings));
+  // ao lado da tabela, nesta ordem: velocidade dos carros em disputa, pneus e
+  // VE (LMU) e, por ultimo, o relogio da volta mais rapida
+  updateTrackTag();
+  const battleWidth = updateBattleSide(standings, 0);
+  const lmuWidth = updateLmuSide(standings, battleWidth);
+  updateFastLapClock(standings, lmuWidth || battleWidth);
 }
 
 function renderTable(standings) {
@@ -1763,7 +2005,7 @@ function renderTable(standings) {
   if (!rightModeAvailable(RIGHT_COLUMN_MODES[rightColumnIndex])) rightColumnIndex = 0;
   document.getElementById("rightColumnLabel").textContent = RIGHT_COLUMN_MODES[rightColumnIndex];
   document.getElementById("timing-table").classList.remove("wide-right");
-  document.getElementById("pageLabel").textContent = currentPageLabel(standings);
+  document.getElementById("pageLabel").textContent = currentPageLabel(standings) + (battleActive() ? " · Disputas" : "");
 
   const groupRanks = buildGroupRanks(standings);
 
@@ -1811,7 +2053,6 @@ function renderTable(standings) {
     container.removeChild(container.lastChild);
   }
 
-  const purpleOwners = computePurpleOwners(standings, isClassMode);
 
   // carro da frente e lider reais (ordem completa, nao so as linhas visiveis)
   {
@@ -1913,6 +2154,7 @@ function renderTable(standings) {
     );
 
     el.classList.toggle("player", playerHighlightEnabled && isDriving);
+    el.classList.toggle("battle", battleActive() && battleNames.has(entry.name));
     el.classList.toggle("dnf", isDnf(entry));
     let isPurple = false;
     const cls = groupKey(entry, standings);
@@ -1929,6 +2171,18 @@ function renderTable(standings) {
     el.style.borderTopColor = clr;
     const teamInfo = rltLookup(entry);
     applyTeamTint(el, teamInfo && teamInfo.teamPrimaryColor);
+    // pagina de disputas: a linha inteira fica na cor da equipe, como no WEC
+    // (sem equipe conhecida, na cor da classe), com o texto na cor que da leitura
+    // Na cor da equipe o logo normal pode sumir (logo da mesma cor do fundo):
+    // ai vale a variante do logo, clara em fundo escuro e escura em fundo claro.
+    let logoVariant = null;
+    if (el.classList.contains("battle")) {
+      const battleRgb = LLGColors.toRgb((teamInfo && teamInfo.teamPrimaryColor) || clr) || [255, 157, 30];
+      const fg = LLGColors.readableOn(battleRgb);
+      el.style.setProperty("--battle-bg", `rgb(${battleRgb.join(", ")})`);
+      el.style.setProperty("--battle-fg", fg);
+      logoVariant = fg === "#ffffff" ? "light" : "dark";
+    }
     el.classList.toggle("yellow-flag", !!entry.causedYellow);
     if (!el.classList.contains("flash-up") && !el.classList.contains("flash-down")) {
       if (entry.causedYellow) {
@@ -1968,7 +2222,7 @@ function renderTable(standings) {
     el.dataset.pos = String(item.displayPosition);
 
     const logoImg = el.querySelector(".logo");
-    applyLogo(logoImg, rltTeamName(entry), entry.carName);
+    applyLogo(logoImg, rltTeamName(entry), entry.carName, logoVariant);
     const gainEl = el.querySelector(".pos-gain");
     if (gainEl) {
       gainEl.style.display = "none";
@@ -2003,7 +2257,13 @@ function renderTable(standings) {
     const badge = el.querySelector(".pit-badge");
     const inPitNow = isInPit(entry) || isExitingPit(entry);
     const showOut = !inPitNow && (rv.pitPhase === "done" || isOutLap(entry));
-    if (inPitNow || rv.pitPhase === "in" || rv.pitPhase === "out") {
+    // volta de formacao: todo mundo sai do grid junto, entao os avisos de box
+    // (P / OUT) e as parciais nao dizem nada e ficam escondidos
+    const formationLap = Number(latestSessionState) === 4;
+    if (formationLap) {
+      badge.style.display = "none";
+      badge.className = "pit-badge";
+    } else if (inPitNow || rv.pitPhase === "in" || rv.pitPhase === "out") {
       badge.style.display = "";
       badge.textContent = "P";
       badge.className = "pit-badge pit-in";
@@ -2020,13 +2280,14 @@ function renderTable(standings) {
     if (secWrap) {
       // esconde setores no box e na volta de saída (OUT) — evita vermelho no lugar do OUT
       const showSec =
+        !formationLap &&
         (isTimedSession() || !isRaceSession()) &&
         !inPitNow &&
         !showOut &&
         entry.pitMode === 0;
       secWrap.style.display = showSec ? "" : "none";
       if (showSec) {
-        const colors = updateSectorDisplay(entry, purpleOwners);
+        const colors = sectorTracker.view(entry.name, Date.now()).map((sec) => sec.color);
         const boxes = secWrap.querySelectorAll("i");
         boxes.forEach((box, idx) => {
           box.className = colors[idx] ? `sec-${colors[idx]}` : "";
@@ -2064,6 +2325,7 @@ document.addEventListener("keydown", (e) => {
   else if (k === "[" || k === "{") applyOverlayCommand("overlay.prevPage");
   else if (k === "]" || k === "}") applyOverlayCommand("overlay.nextPage");
   else if (c === "KeyP" || k === "p" || k === "P") applyOverlayCommand("overlay.toggleHighlight");
+  else if (k === "9") applyOverlayCommand("overlay.toggleBattles");
 });
 
 setInterval(() => {

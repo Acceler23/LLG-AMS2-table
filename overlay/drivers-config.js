@@ -472,3 +472,11 @@ const ACC_CLASS_NAMES = {
 const AC_CLASS_NAMES = {
   // "Supercars": "Hypercars",
 };
+
+// ---- cabecalho da tabela ----
+// Texto da faixa do campeonato quando nao ha temporada aplicada (com
+// temporada, aparece o nome dela) e a cor dessa faixa.
+const HEADER_TITLE = "Liga Let's Go";
+const HEADER_COLOR = "#0b5ed7";
+
+// Os nomes de pista do cabecalho ficam em outro arquivo: overlay/track-names.js

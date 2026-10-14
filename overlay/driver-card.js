@@ -205,6 +205,53 @@ function classPosition(entry, standings) {
   return grouper.position(entry, standings);
 }
 
+// ---- pagina de disputas: pedais ----
+// Quando a tabela esta na pagina de disputas (ela avisa pelo WebSocket, ver
+// announceBattleState em timing-table.js), o card troca velocidade, largada e
+// melhor volta por uma barra unica dos pedais: o acelerador enche da esquerda
+// para a direita e o freio da direita para a esquerda, com a marcha e a
+// velocidade ao lado. So aparece se o jogo informa os pedais do carro em foco
+// (por enquanto, o Le Mans Ultimate).
+const BATTLE_STATE_MAX_AGE_MS = 6000; // a tabela repete o aviso a cada 2 s
+let battlePage = { active: false, at: 0 };
+
+function showPedals(entry) {
+  if (!battlePage.active || Date.now() - battlePage.at > BATTLE_STATE_MAX_AGE_MS) return false;
+  if (latestSessionState !== 5 || standingsView) return false;
+  return typeof entry.throttle === "number" && typeof entry.brake === "number";
+}
+
+function renderPedals(stats, entry) {
+  if (stats.dataset.mode !== "pedals") {
+    // monta uma vez; depois so muda as larguras e os textos (a barra desliza)
+    stats.dataset.mode = "pedals";
+    stats.classList.add("pedals");
+    stats.innerHTML = `
+      <div class="pedal-bar">
+        <div class="pedal-fill throttle"></div>
+        <div class="pedal-fill brake"></div>
+        <span class="pedal-label left">Acelerador</span>
+        <span class="pedal-label right">Freio</span>
+      </div>
+      <div class="pedal-box"><div class="v gear"></div><div class="l">Marcha</div></div>
+      <div class="pedal-box"><div class="v speed"></div><div class="l">km/h</div></div>
+    `;
+  }
+  const pct = (v) => `${Math.round(Math.max(0, Math.min(1, v)) * 100)}%`;
+  stats.querySelector(".pedal-fill.throttle").style.width = pct(entry.throttle);
+  stats.querySelector(".pedal-fill.brake").style.width = pct(entry.brake);
+  const gear = entry.gear;
+  stats.querySelector(".gear").textContent = gear == null ? "—" : gear < 0 ? "R" : gear === 0 ? "N" : String(gear);
+  stats.querySelector(".speed").textContent = typeof entry.speedKmh === "number" ? String(Math.round(entry.speedKmh)) : "—";
+}
+
+// classificacao e time attack: o card mostra as parciais da volta
+function isQualifying() {
+  return latestSessionState === 3 || latestSessionState === 6;
+}
+
+const sectorTracker = LLGSectors.createSectorTracker();
+
 function isTimedSession() {
   return latestSessionState === 1 || latestSessionState === 2 || latestSessionState === 3 || latestSessionState === 6;
 }
@@ -273,6 +320,10 @@ function render() {
   const classPos = dnf ? "DNF" : classPosition(entry, latestStandings) || overall;
   document.getElementById("posClass").textContent = dnf ? "—" : classPos || "—";
   document.getElementById("posOverall").textContent = dnf ? "DNF" : overall || "—";
+  // Com uma classe so na sessao, a posicao geral e a da classe sao o mesmo
+  // numero: o de baixo (geral) so aparece em multiclasse ou para avisar o DNF.
+  const classCount = new Set(latestStandings.map((e) => grouper.key(e, latestStandings))).size;
+  document.getElementById("posOverall").style.display = classCount > 1 || dnf ? "" : "none";
 
   // nome e cor da classe pelas mesmas regras da tabela
   const classBar = document.getElementById("classBar");
@@ -292,10 +343,19 @@ function render() {
   setBgLogo(document.getElementById("bgLogo"), team, entry.carName);
 
   const stats = document.getElementById("stats");
+  // pagina de disputas da tabela: barra dos pedais, marcha e velocidade
+  if (showPedals(entry)) {
+    renderPedals(stats, entry);
+    return;
+  }
+  if (stats.dataset.mode === "pedals") {
+    stats.dataset.mode = "";
+    stats.classList.remove("pedals");
+  }
   // pontuacao so com temporada do RLT aplicada
   if (standingsView && rltConfig && rltConfig.standingsRows && rltConfig.standingsRows.length) {
     const row = findStandingsRow(entry);
-    const champPos = row && row.position != null ? row.position : "—";
+    const champPos = row && row.position != null && row.position < 999 ? row.position : "—";
     const pts = row && row.points != null ? row.points : "—";
     let gap = "—";
     if (row && row.gapToLeader != null && String(row.gapToLeader).trim() !== "") {
@@ -312,8 +372,24 @@ function render() {
       <div class="stat"><div class="v">${pts}</div><div class="l">Pontos</div></div>
       <div class="stat"><div class="v">${gap}</div><div class="l">Gap líder</div></div>
     `;
+  } else if (isQualifying()) {
+    // classificacao: as tres parciais da volta, no estilo do WEC. Em cima o
+    // nome e a barra da parcial, na cor dela (shared/sectors.js); embaixo, ao
+    // ser fechada, o tempo e a diferenca para o lider da classe.
+    const sectors = sectorTracker.view(entry.name, Date.now());
+    stats.innerHTML = sectors
+      .map((sec, i) => {
+        const cls = sec.color ? ` ${sec.color}` : "";
+        const time = sec.ms != null ? formatTime(sec.ms) : "&nbsp;";
+        let delta = "";
+        if (sec.ms != null && sec.deltaMs != null) {
+          delta = `${sec.deltaMs > 0 ? "+" : sec.deltaMs < 0 ? "-" : ""}${(Math.abs(sec.deltaMs) / 1000).toFixed(3)}`;
+        }
+        return `<div class="stat sector${cls}"><div class="l">S${i + 1}</div><div class="bar"></div><div class="t"><span class="v">${time}</span><span class="d">${delta}</span></div></div>`;
+      })
+      .join("");
   } else if (isTimedSession()) {
-    // treino e classificacao: velocidade, melhor volta e diferenca pro lider da classe
+    // treino: velocidade, melhor volta e diferenca pro lider da classe
     const speed = typeof entry.speedKmh === "number" ? `${Math.round(entry.speedKmh)} km/h` : "—";
     const fl = entry.fastestLapMs ? formatTime(entry.fastestLapMs) : "—";
     stats.innerHTML = `
@@ -322,13 +398,15 @@ function render() {
       <div class="stat"><div class="v">${classLeaderGap(entry, latestStandings)}</div><div class="l">Líder da classe</div></div>
     `;
   } else {
-    // "Atual" e a posicao na classe, entao a largada tambem e na classe
+    // corrida: velocidade, posicao de largada e melhor volta. A posicao atual ja
+    // esta em destaque a esquerda (na classe), entao a largada tambem e na classe
     // (a posicao de largada geral vem do servidor, server/raceState.js)
     const startInClass = grouper.startPosition(entry, latestStandings);
     const start = startInClass != null ? startInClass : "—";
+    const speed = typeof entry.speedKmh === "number" ? `${Math.round(entry.speedKmh)} km/h` : "—";
     const fl = entry.fastestLapMs ? formatTime(entry.fastestLapMs) : "—";
     stats.innerHTML = `
-      <div class="stat"><div class="v">${classPos || "—"}</div><div class="l">Atual</div></div>
+      <div class="stat"><div class="v">${speed}</div><div class="l">Velocidade</div></div>
       <div class="stat"><div class="v">${start}</div><div class="l">Largada</div></div>
       <div class="stat"><div class="v">${fl}</div><div class="l">Melhor volta</div></div>
     `;
@@ -359,8 +437,11 @@ function connect() {
         const session = Array.isArray(payload) ? null : payload && payload.session;
         if (session && session.state != null) {
           const st = Number(session.state);
-          latestSessionState = Number.isNaN(st) ? null : st;
+          const next = Number.isNaN(st) ? null : st;
+          if (next !== latestSessionState) sectorTracker.reset(); // sessao nova: parciais do zero
+          latestSessionState = next;
         }
+        sectorTracker.update(latestStandings, (e) => grouper.key(e, latestStandings), Date.now());
         render();
       } else if (msg.type === "hello") {
         checkBuildId(msg.buildId);
@@ -373,7 +454,11 @@ function connect() {
         render();
       } else if (msg.type === "overlayCommand") {
         const name = msg.name;
-        if (name === "overlay.toggleStandings") {
+        if (name === "overlay.battleState") {
+          // aviso da tabela: pagina de disputas ligada ou desligada
+          battlePage = { active: !!(msg.payload && msg.payload.active), at: Date.now() };
+          render();
+        } else if (name === "overlay.toggleStandings") {
           standingsView = !standingsView;
           render();
         } else if (name === "overlay.setStandings") {

@@ -39,4 +39,97 @@ test("caminhos de logo: equipe primeiro, carro como reserva", () => {
   // equipe com nome de montadora usa o logo da montadora como reserva
   assert.deepEqual(display.logoPaths("McLaren", "Carro Desconhecido", {}), ["teams/mclaren.png", "cars/mclaren.png"]);
   assert.deepEqual(display.logoPaths(null, "Porsche 911", {}), [null, "cars/porsche.png"]);
+  // variantes para fundo escuro (light) e claro (dark): vem antes do logo normal
+  assert.deepEqual(display.logoPaths("Apex", "Porsche 911 GT3 R", {}, "light"), ["teams/apex_racing__light.png", "teams/apex_racing.png", "cars/porsche__light.png", "cars/porsche.png"]);
+  assert.deepEqual(display.logoPaths(null, "Porsche 911", {}, "dark"), [null, null, "cars/porsche__dark.png", "cars/porsche.png"]);
+  assert.deepEqual(display.logoPaths("Apex", "Porsche 911 GT3 R", {}, "outra"), ["teams/apex_racing.png", "cars/porsche.png"]);
+});
+
+test("nome da pista: lista do drivers-config, senao o nome do jogo arrumado", () => {
+  const { trackDisplay, setConfig } = require("../overlay/shared/display");
+  setConfig({ trackNames: { Kansai: "Suzuka", "Interlagos Kart 1": "Kartódromo de Interlagos" } });
+  try {
+    assert.deepEqual(trackDisplay("Kansai", ""), { name: "Suzuka", layout: "" });
+    assert.deepEqual(trackDisplay("kansai", "GP"), { name: "Suzuka", layout: "GP" }); // sem diferenciar maiusculas
+    assert.deepEqual(trackDisplay("Interlagos", "Kart 1"), { name: "Kartódromo de Interlagos", layout: "" }); // pista + tracado
+    assert.deepEqual(trackDisplay("Interlagos", "GP"), { name: "Interlagos", layout: "GP" });
+    assert.deepEqual(trackDisplay("ks_vallelunga", "extended_circuit"), { name: "Vallelunga", layout: "Extended Circuit" });
+    assert.deepEqual(trackDisplay("spa", "spa"), { name: "Spa", layout: "" }); // tracado igual ao nome nao repete
+    assert.deepEqual(trackDisplay("Circuit de Spa-Francorchamps", ""), { name: "Circuit de Spa-Francorchamps", layout: "" });
+    assert.deepEqual(trackDisplay("", ""), { name: "", layout: "" });
+  } finally {
+    setConfig(null);
+  }
+});
+
+test("etapa do RLT que bate com a pista do jogo", () => {
+  const { matchEvent, countryName } = require("../overlay/shared/display");
+  const events = [
+    { round: 1, trackName: "Nurburgring Vedool", uniqueName: "nurburgring.vedool.2002", circuitOrigin: "Nurburgring", eventDate: "2026-09-17", completedStatus: "Completed" },
+    { round: 4, trackName: "Suzuka", uniqueName: "suzuka.2003", circuitOrigin: "Suzuka", eventDate: "2026-10-08", completedStatus: "Completed" },
+    { round: 5, trackName: "Spielberg", uniqueName: "spielberg.2016", circuitOrigin: "Speilberg", eventDate: "2026-10-15", completedStatus: "InFuture", country: "Austria" },
+    { round: 6, trackName: "Interlagos SCB ", uniqueName: "interlagos.scb.2011", circuitOrigin: "Interlagos", eventDate: "2026-11-08", completedStatus: "InFuture" },
+  ];
+  const now = Date.parse("2026-10-09T00:00:00Z");
+  assert.equal(matchEvent(events, ["Spielberg", "RedBull Ring"], now).round, 5); // o nome do jogo bate, mesmo com outro nome no track-names.js
+  assert.equal(matchEvent(events, ["Kansai", "Suzuka"], now).round, 4); // bate pelo nome trocado no track-names.js
+  assert.equal(matchEvent(events, ["Nürburgring", "Nürburgring GP"], now).round, 1); // acento e nome mais curto
+  assert.equal(matchEvent(events, ["Interlagos", "Interlagos GP"], now).round, 6); // "Interlagos" dentro de "Interlagos SCB"
+  assert.equal(matchEvent(events, ["Monza"], now), null);
+  assert.equal(matchEvent(events, ["", null], now), null);
+  assert.equal(matchEvent(events, ["Spa"], now), null); // "spa" nao e "spielberg"
+  assert.equal(countryName("Austria"), "Áustria");
+  assert.equal(countryName("Brazil"), "Brasil");
+  assert.equal(countryName("Wakanda"), "Wakanda");
+  assert.equal(countryName(null), "");
+});
+
+test("pista repetida no calendario: vale a etapa nao concluida mais perto de hoje", () => {
+  const { matchEvent } = require("../overlay/shared/display");
+  const events = [
+    { round: 1, trackName: "Cascavel", eventDate: "2026-09-01", completedStatus: "Completed" },
+    { round: 3, trackName: "Cascavel", eventDate: "2026-10-18", completedStatus: "InFuture" },
+    { round: 5, trackName: "Cascavel", eventDate: "2026-11-25", completedStatus: "InFuture" },
+  ];
+  assert.equal(matchEvent(events, ["Cascavel"], Date.parse("2026-10-17T20:00:00Z")).round, 3);
+  assert.equal(matchEvent(events, ["Cascavel"], Date.parse("2026-11-24T20:00:00Z")).round, 5);
+  // todas concluidas: a mais recente em relacao a hoje
+  const done = events.map((e) => Object.assign({}, e, { completedStatus: "Completed" }));
+  assert.equal(matchEvent(done, ["Cascavel"], Date.parse("2026-12-01T00:00:00Z")).round, 5);
+});
+
+test("numero da bateria: pelo que ja tem resultado, ou pela escolha do painel", () => {
+  const { heatNumber, flagFile } = require("../overlay/shared/display");
+  const two = (a, b) => [{ caption: "Race 1", completed: a }, { caption: "Race 2", completed: b }];
+  assert.equal(heatNumber(two(false, false)), 1); // nada lancado: corrida 1
+  assert.equal(heatNumber(two(true, false)), 2); // corrida 1 ja tem resultado
+  assert.equal(heatNumber(two(true, true)), 2); // tudo lancado: fica na ultima
+  assert.equal(heatNumber([{ completed: false }]), null); // etapa de uma corrida so: sem numero
+  assert.equal(heatNumber([]), null);
+  assert.equal(heatNumber(null), null); // sem etapa
+  // escolha do painel: 0 = sem numero, outro = essa bateria, vazio = automatico
+  assert.equal(heatNumber(two(true, false), 0), null);
+  assert.equal(heatNumber(two(false, false), 2), 2);
+  assert.equal(heatNumber(null, 3), 3);
+  assert.equal(heatNumber(two(true, false), null), 2);
+  assert.equal(heatNumber(two(true, false), ""), 2);
+  // arquivo da bandeira
+  assert.equal(flagFile("United States Of America"), "country/united_states_of_america.png");
+  assert.equal(flagFile("Brazil"), "country/brazil.png");
+  assert.equal(flagFile(""), null);
+});
+
+test("nome da pista: chave com * vale para qualquer nome que contenha o trecho", () => {
+  const { trackDisplay, setConfig } = require("../overlay/shared/display");
+  setConfig({ trackNames: { "*Daytona": "Daytona", "*Carlos Pace": "Interlagos", "*Sarthe": "Le Mans", "Circuit de la Sarthe Mulsanne": "Le Mans (sem chicanes)" } });
+  try {
+    assert.deepEqual(trackDisplay("Daytona International Speedway Road Course", ""), { name: "Daytona", layout: "" });
+    assert.deepEqual(trackDisplay("Autódromo José Carlos Pace", ""), { name: "Interlagos", layout: "" }); // sem diferenciar acento
+    assert.deepEqual(trackDisplay("AUTODROMO JOSE CARLOS PACE", ""), { name: "Interlagos", layout: "" });
+    assert.deepEqual(trackDisplay("Circuit de la Sarthe", ""), { name: "Le Mans", layout: "" });
+    assert.deepEqual(trackDisplay("Circuit de la Sarthe Mulsanne", ""), { name: "Le Mans (sem chicanes)", layout: "" }); // a chave exata ganha
+    assert.deepEqual(trackDisplay("Sebring International Raceway", ""), { name: "Sebring International Raceway", layout: "" }); // sem regra: como veio
+  } finally {
+    setConfig(null);
+  }
 });
