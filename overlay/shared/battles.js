@@ -6,21 +6,24 @@
 // intervalo. Para nao destacar uma aproximacao passageira nem piscar quando o
 // intervalo oscila, ha um filtro de tempo: o par so vira disputa depois de
 // ENTER_MS seguidos abaixo do limite, e so deixa de ser depois de LEAVE_MS
-// seguidos acima dele (ou sem estarem mais um atras do outro).
+// seguidos acima dele (ou sem estarem mais um atras do outro). Se o intervalo
+// passa de BREAK_S, a disputa acaba na hora: o carro de tras ficou para tras.
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.LLGBattles = api;
 })(typeof self !== "undefined" ? self : this, function () {
-  const GAP_S = 0.3;
-  const ENTER_MS = 10000;
-  const LEAVE_MS = 5000;
+  const GAP_S = 0.6;
+  const ENTER_MS = 5000;
+  const LEAVE_MS = 10000;
+  const BREAK_S = 2;
 
   function createBattleDetector(options) {
     const opts = options || {};
     const limit = opts.gap != null ? opts.gap : GAP_S;
     const enterMs = opts.enterMs != null ? opts.enterMs : ENTER_MS;
     const leaveMs = opts.leaveMs != null ? opts.leaveMs : LEAVE_MS;
+    const breakGap = opts.breakGap != null ? opts.breakGap : BREAK_S;
     // par -> { a, b, inSince, outSince, active }. A chave nao depende de quem
     // esta na frente: uma ultrapassagem no meio da briga nao zera a contagem.
     let pairs = new Map();
@@ -39,13 +42,16 @@
     // Devolve os nomes de quem esta em alguma disputa.
     function update(ordered, gapOf, now) {
       const close = new Set(); // pares abaixo do limite agora
+      const broken = new Set(); // pares que abriram mais que BREAK_S
       for (let i = 1; i < (ordered || []).length; i++) {
         const ahead = ordered[i - 1];
         const behind = ordered[i];
         if (!ahead || !behind) continue;
         const gap = gapOf(behind, ahead);
-        if (typeof gap !== "number" || !(gap >= 0) || gap >= limit) continue;
+        if (typeof gap !== "number" || !(gap >= 0)) continue;
         const key = pairKey(behind.name, ahead.name);
+        if (gap > breakGap) broken.add(key);
+        if (gap >= limit) continue;
         close.add(key);
         if (!pairs.has(key)) pairs.set(key, { a: behind.name, b: ahead.name, inSince: now, outSince: null, active: false });
       }
@@ -58,8 +64,8 @@
           if (!st.active && now - st.inSince >= enterMs) st.active = true;
         } else {
           st.inSince = null;
-          if (!st.active) {
-            pairs.delete(key); // nem chegou a virar disputa
+          if (!st.active || broken.has(key)) {
+            pairs.delete(key); // nem chegou a virar disputa, ou abriu demais
             return;
           }
           if (st.outSince === null) st.outSince = now;
@@ -121,5 +127,5 @@
     return starts[t];
   }
 
-  return { createBattleDetector, battleWindowStart, GAP_S, ENTER_MS, LEAVE_MS };
+  return { createBattleDetector, battleWindowStart, GAP_S, ENTER_MS, LEAVE_MS, BREAK_S };
 });

@@ -1,0 +1,151 @@
+/* Estatisticas da pista: as 5 primeiras linhas de um dado do multiseason do
+   RLT. Mesmas cores da tabela de tempos (timing-table.css).
+   Desenhada para 420 px de largura; track-stats.js aplica zoom para
+   acompanhar a largura da janela/fonte. */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: transparent;
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: #fff;
+  overflow: hidden;
+}
+
+#track-stats {
+  width: 420px;
+  background-color: rgb(14, 58, 102);
+  border: 2px solid #00c5fd;
+  border-radius: 10px;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+
+#track-stats.hidden { display: none; }
+
+/* nome do dado, na cor do nome da liga (HEADER_COLOR) */
+.ts-title {
+  display: flex;
+  align-items: center;
+  height: 46px;
+  padding: 0 14px;
+  background-color: var(--header-color, #0b5ed7);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* pista (e multiseason a direita) */
+.ts-track {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 14px;
+  background-color: #0a2d52;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ts-track #tsTrack {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* as bandeiras tem uma margem em cima e embaixo: a imagem e maior que a faixa visivel */
+.ts-flag {
+  flex: 0 0 auto;
+  height: 26px;
+  margin: -4px 0;
+}
+
+.ts-season {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+#tsRows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px 0;
+}
+
+/* nome a esquerda, dado a direita. O dado (campeonato) pode ter no maximo
+   ~60% da linha; o que nao cabe diminui a fonte (track-stats.js) e, so em
+   ultimo caso, corta com "..." */
+.ts-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, max-content);
+  align-items: stretch;
+  min-height: 40px;
+  font-size: 19px;
+  background-color: rgb(14, 66, 165);
+  border-top: 3px solid #3a5a8c;
+  margin-left: 5px;
+  border-radius: 0 0 0 10px;
+  overflow: hidden;
+}
+
+.ts-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 10px;
+  font-weight: 600;
+}
+
+.ts-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* tipo do recorde (QUALI / CORRIDA) */
+.ts-tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background-color: rgba(0, 197, 253, 0.25);
+  color: #7ec8ff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.ts-value {
+  align-self: center;
+  max-width: 265px; /* ~60% da linha: o nome (so nome e sobrenome) ainda cabe */
+  padding: 0 12px 0 8px;
+  font-weight: 700;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* texto (nome da temporada) menor que os tempos */
+.ts-value.small {
+  font-size: 14px;
+}
+
+.ts-empty {
+  padding: 10px 14px;
+  font-size: 15px;
+  opacity: 0.8;
+}

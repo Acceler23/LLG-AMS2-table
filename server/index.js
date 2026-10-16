@@ -23,6 +23,7 @@ const { startAcClient } = require("./acClient");
 const { installAcApp, findSteamLibraries } = require("./acInstaller");
 const carsets = require("./carsets");
 const secret = require("./secret");
+const { compactTracks, compactMultiseasons } = require("./trackStats");
 
 // Chave do RLT: a do .env tem prioridade; senao, a ultima salva pelo painel.
 // (ler sempre: uma chave antiga, salva em texto puro, e regravada criptografada)
@@ -150,8 +151,173 @@ app.post("/api/acc/stint", (req, res) => {
   res.json({ ok: true, minutes: accStintLimitMin });
 });
 
+// ---- estatisticas da pista (overlay/track-stats.html) ----
+// O painel escolhe o multiseason, o dado (ultimos vencedores, ultimas poles ou
+// recordes) e, se quiser, a pista; no automatico a overlay usa a pista do jogo.
+// As pistas do multiseason vem numa chamada so e sao relidas a cada 10 min.
+const TRACK_STATS_REFRESH_MS = 10 * 60 * 1000;
+const TRACK_STATS_KINDS = ["winners", "poles", "records"];
+const trackStats = {
+  key: typeof settings.get("trackStatsKey") === "string" ? settings.get("trackStatsKey") : "",
+  stat: TRACK_STATS_KINDS.includes(settings.get("trackStatsStat")) ? settings.get("trackStatsStat") : "winners",
+  trackId: settings.get("trackStatsTrackId") != null ? Number(settings.get("trackStatsTrackId")) : null,
+  multiseasons: [],
+  tracks: [],
+  loadedKey: null,
+  loadedAt: 0,
+  error: null,
+};
+
+function trackStatsPayload() {
+  const ms = trackStats.multiseasons.find((m) => m.key === trackStats.key);
+  return {
+    key: trackStats.key,
+    name: ms ? ms.name : trackStats.key || "All Seasons",
+    stat: trackStats.stat,
+    trackId: trackStats.trackId,
+    tracks: trackStats.tracks,
+  };
+}
+
+function broadcastTrackStats() {
+  wss.broadcast({ type: "trackStats", data: trackStatsPayload() });
+}
+
+async function loadTrackStats(force) {
+  if (!rlt.hasKey()) return;
+  const fresh = trackStats.loadedKey === trackStats.key && Date.now() - trackStats.loadedAt < TRACK_STATS_REFRESH_MS;
+  if (fresh && !force) return;
+  try {
+    if (!trackStats.multiseasons.length || force) trackStats.multiseasons = compactMultiseasons(await rlt.fetchMultiseasons());
+    trackStats.tracks = compactTracks(await rlt.fetchMultiseasonStatistics(trackStats.key));
+    trackStats.loadedKey = trackStats.key;
+    trackStats.loadedAt = Date.now();
+    trackStats.error = null;
+  } catch (err) {
+    trackStats.error = err.message;
+    console.warn("RLT: estatisticas da pista indisponiveis agora:", err.message);
+  }
+  broadcastTrackStats();
+}
+setInterval(() => loadTrackStats(false).catch(() => {}), TRACK_STATS_REFRESH_MS);
+
+app.get("/api/trackstats", async (req, res) => {
+  await loadTrackStats(false);
+  res.json({
+    ok: true,
+    hasKey: rlt.hasKey(),
+    error: trackStats.error,
+    key: trackStats.key,
+    stat: trackStats.stat,
+    trackId: trackStats.trackId,
+    multiseasons: trackStats.multiseasons,
+    tracks: trackStats.tracks.map((t) => ({ trackId: t.trackId, name: t.name, totalEvents: t.totalEvents })),
+  });
+});
+
+app.post("/api/trackstats", async (req, res) => {
+  const body = req.body || {};
+  if (typeof body.key === "string" && body.key !== trackStats.key) {
+    trackStats.key = body.key;
+    trackStats.trackId = null; // as pistas mudam com o multiseason
+    trackStats.loadedKey = null;
+  }
+  if (TRACK_STATS_KINDS.includes(body.stat)) trackStats.stat = body.stat;
+  if ("trackId" in body) trackStats.trackId = body.trackId == null || body.trackId === "" ? null : Number(body.trackId);
+  settings.set("trackStatsKey", trackStats.key || null);
+  settings.set("trackStatsStat", trackStats.stat);
+  settings.set("trackStatsTrackId", trackStats.trackId);
+  await loadTrackStats(false);
+  broadcastTrackStats();
+  res.json({ ok: true, error: trackStats.error, key: trackStats.key, stat: trackStats.stat, trackId: trackStats.trackId });
+});
+
 app.get("/api/overlay/alternate", (req, res) => {
   res.json({ ok: true, enabled: alternate.enabled, seconds: alternate.seconds });
+});
+
+// ---- ligacao dos pilotos da pista com o RLT ----
+// O servidor faz a mesma ligacao que as overlays (overlay/shared/names.js)
+// para saber quem ficou sem: isso aparece no painel (aba Pilotos), onde da para
+// ligar a mao, e acelera a releitura do RLT ate todos estarem ligados.
+const LLGNames = require("../overlay/shared/names");
+let manualLinks = settings.get("manualLinks") || {};
+rlt.setManualLinks(manualLinks);
+let sessionNames = [];
+let linkStatus = { season: null, unmatched: [], ignored: [], linked: [], free: [] };
+
+function ingameMapFromConfig() {
+  // RLT_INGAME_MAP do drivers-config.js (le o arquivo, como o navegador faz)
+  try {
+    const text = fs.readFileSync(path.join(__dirname, "..", "overlay", "drivers-config.js"), "utf8");
+    const m = /const\s+RLT_INGAME_MAP\s*=\s*(\{[\s\S]*?\n\});/.exec(text);
+    return m ? Function(`"use strict"; return (${m[1]});`)() : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function updateLinkStatus() {
+  const cfg = rlt.getOverlayPayload();
+  if (!cfg) {
+    linkStatus = { season: null, unmatched: [], ignored: [], linked: [], free: [] };
+    rlt.setFastRefresh(false);
+    return;
+  }
+  const matcher = LLGNames.createMatcher(LLGNames.buildPool(cfg), {
+    explicitMap: Object.assign({}, ingameMapFromConfig(), cfg.manualLinks || {}),
+  });
+  matcher.prime(sessionNames);
+  const st = matcher.status();
+  const label = (d) => d.displayName || d.driverName || `${d.firstName || ""} ${d.lastName || ""}`.trim();
+  linkStatus = {
+    season: cfg.seasonName || null,
+    unmatched: st.unmatched,
+    ignored: st.ignored,
+    linked: st.linked.map((l) => ({ name: l.name, driver: label(l.driver), manual: Object.prototype.hasOwnProperty.call(cfg.manualLinks || {}, l.name) })),
+    free: st.freeDrivers.map((d) => ({ name: label(d), className: d.name && d.name !== "—" ? d.name : null })).sort((a, b) => a.name.localeCompare(b.name)),
+  };
+  // alguem na pista sem ligacao: rele o RLT mais vezes, so os perfis de quem falta
+  const freeIds = st.freeDrivers.map((d) => d.driverId).filter((x) => x != null);
+  rlt.setFastRefresh(st.unmatched.length > 0, freeIds);
+}
+
+// nomes da sessao atual (sem os caracteres invisiveis de nomes repetidos)
+let linkTimer = null;
+function noteSessionNames(standings) {
+  const names = (standings || []).map((e) => String((e && e.name) || "").replace(/\u200B+$/, "")).filter(Boolean);
+  const changed = names.length !== sessionNames.length || names.some((n, i) => n !== sessionNames[i]);
+  sessionNames = names;
+  if (changed && !linkTimer) {
+    linkTimer = setTimeout(() => {
+      linkTimer = null;
+      updateLinkStatus();
+    }, 1000);
+  }
+}
+
+app.get("/api/links", (req, res) => {
+  updateLinkStatus();
+  res.json({ ok: true, ...linkStatus, manual: rlt.getManualLinks() });
+});
+
+// { name: "nome no jogo", driver: "piloto do RLT" | "" (ignorar) | null (desfazer) }
+app.post("/api/links", (req, res) => {
+  const cfg = rlt.getOverlayPayload();
+  if (!cfg || !cfg.seasonId) return res.status(400).json({ ok: false, error: "Aplique uma temporada primeiro." });
+  const name = String((req.body && req.body.name) || "").trim();
+  if (!name) return res.status(400).json({ ok: false, error: "Nome do jogo vazio." });
+  const driver = req.body && req.body.driver;
+  const season = String(cfg.seasonId);
+  const forSeason = Object.assign({}, manualLinks[season] || {});
+  if (driver === null || driver === undefined) delete forSeason[name];
+  else forSeason[name] = String(driver);
+  manualLinks = Object.assign({}, manualLinks, { [season]: forSeason });
+  settings.set("manualLinks", manualLinks);
+  rlt.setManualLinks(manualLinks);
+  broadcastRlt();
+  updateLinkStatus();
+  res.json({ ok: true, ...linkStatus, manual: rlt.getManualLinks() });
 });
 
 function broadcastRlt() {
@@ -161,6 +327,7 @@ function broadcastRlt() {
 
 rlt.onRefresh(() => {
   broadcastRlt();
+  updateLinkStatus(); // pode ter chegado um nome no jogo novo do RLT
 });
 
 // "Versao" dos arquivos da overlay: a data de modificacao mais recente entre
@@ -200,6 +367,9 @@ wss.onConnect((socket) => {
   }
   if (socket.readyState === 1) {
     socket.send(JSON.stringify({ type: "assetsConfig", data: assetsConfigPayload() }));
+  }
+  if (socket.readyState === 1 && trackStats.tracks.length) {
+    socket.send(JSON.stringify({ type: "trackStats", data: trackStatsPayload() }));
   }
 });
 
@@ -412,6 +582,7 @@ app.post("/api/rlt/key", async (req, res) => {
     }
     settings.set("seasonId", null);
     settings.setSecret("rltApiKey", rlt.getApiKey()); // so guarda a chave que funcionou (criptografada)
+    loadTrackStats(true).catch(() => {});
     res.json({
       ok: true,
       hasKey: true,
@@ -524,6 +695,7 @@ function handleGamePayload(payload) {
   // LMU: o carro em foco vem da API do jogo (funciona tambem como espectador)
   if (payload.game === "lmu") lmuFocus.apply(payload);
   const data = raceState.apply(payload);
+  noteSessionNames(data && data.standings);
   // ACC: limite de stint escolhido no painel (0 = sem limite)
   if (data && data.game === "acc" && data.session) data.session.stintLimitMin = accStintLimitMin;
   wss.broadcast({ type: "standings", data });
@@ -611,6 +783,7 @@ server.listen(HTTP_PORT, async () => {
   console.log(`Tabela de tempos em      http://localhost:${HTTP_PORT}/overlay/timing-table.html`);
   console.log(`Driver card overlay em   http://localhost:${HTTP_PORT}/overlay/driver-card.html`);
   console.log(`Tabela do piloto em      http://localhost:${HTTP_PORT}/overlay/driver-table.html`);
+  console.log(`Estatisticas da pista em http://localhost:${HTTP_PORT}/overlay/track-stats.html`);
   console.log(`Painel de controle em    http://localhost:${HTTP_PORT}/panel/panel.html`);
   console.log(`Aguardando os jogos: AMS2 (listener.ps1), LMU (listener-lmu.ps1) e ACC (API de transmissao)`);
   console.log(ALLOW_LAN ? "Acesso liberado para a rede local (ALLOW_LAN)." : "Acesso restrito a este computador.");
@@ -633,6 +806,7 @@ server.listen(HTTP_PORT, async () => {
       console.warn("RLT: nao foi possivel carregar agora:", err.message);
       rlt.startRefresh();
     }
+    loadTrackStats(true).catch(() => {});
   }
 });
 

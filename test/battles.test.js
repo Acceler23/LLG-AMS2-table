@@ -17,35 +17,44 @@ function run(d, t, seconds, order, gaps) {
   return names;
 }
 
-test("disputa: so depois de 10 s seguidos com menos de 0,3 s", () => {
+test("disputa: so depois de 5 s seguidos com menos de 0,6 s", () => {
   const d = createBattleDetector();
   const t = { ms: 0 };
   const order = cars("A", "B", "C", "D");
-  const gaps = { "B>A": 0.25, "C>B": 1.2, "D>C": 0.31 };
-  assert.equal(run(d, t, 9, order, gaps).size, 0); // 9 s: ainda nao
-  assert.deepEqual(sorted(run(d, t, 2, order, gaps)), ["A", "B"]); // passou de 10 s
+  const gaps = { "B>A": 0.55, "C>B": 1.2, "D>C": 0.61 };
+  assert.equal(run(d, t, 4, order, gaps).size, 0); // 4 s: ainda nao
+  assert.deepEqual(sorted(run(d, t, 2, order, gaps)), ["A", "B"]); // passou de 5 s
 });
 
 test("aproximacao passageira nao vira disputa: a contagem recomeca", () => {
   const d = createBattleDetector();
   const t = { ms: 0 };
   const order = cars("A", "B");
-  run(d, t, 8, order, { "B>A": 0.2 });
-  run(d, t, 1, order, { "B>A": 0.6 }); // abriu antes dos 10 s
-  assert.equal(run(d, t, 8, order, { "B>A": 0.2 }).size, 0); // 8 s desde que voltou
-  assert.equal(run(d, t, 3, order, { "B>A": 0.2 }).size, 2);
+  run(d, t, 4, order, { "B>A": 0.4 });
+  run(d, t, 1, order, { "B>A": 0.9 }); // abriu antes dos 5 s
+  assert.equal(run(d, t, 4, order, { "B>A": 0.4 }).size, 0); // 4 s desde que voltou
+  assert.equal(run(d, t, 2, order, { "B>A": 0.4 }).size, 2);
 });
 
-test("so deixa de ser disputa depois de 5 s seguidos fora", () => {
+test("so deixa de ser disputa depois de 10 s seguidos fora", () => {
   const d = createBattleDetector();
   const t = { ms: 0 };
   const order = cars("A", "B");
-  run(d, t, 11, order, { "B>A": 0.2 });
-  assert.equal(run(d, t, 4, order, { "B>A": 0.8 }).size, 2); // 4 s fora: continua
-  assert.equal(run(d, t, 1, order, { "B>A": 0.2 }).size, 2); // voltou a colar
-  assert.equal(run(d, t, 4, order, { "B>A": 0.8 }).size, 2); // a contagem de saida recomecou
-  assert.equal(run(d, t, 2, order, { "B>A": 0.8 }).size, 0); // 6 s seguidos fora
-  assert.equal(run(d, t, 5, order, { "B>A": 0.2 }).size, 0); // para voltar, 10 s de novo
+  run(d, t, 6, order, { "B>A": 0.4 });
+  assert.equal(run(d, t, 9, order, { "B>A": 1.5 }).size, 2); // 9 s fora: continua
+  assert.equal(run(d, t, 1, order, { "B>A": 0.4 }).size, 2); // voltou a colar
+  assert.equal(run(d, t, 9, order, { "B>A": 1.5 }).size, 2); // a contagem de saida recomecou
+  assert.equal(run(d, t, 2, order, { "B>A": 1.5 }).size, 0); // 11 s seguidos fora
+  assert.equal(run(d, t, 4, order, { "B>A": 0.4 }).size, 0); // para voltar, 5 s de novo
+});
+
+test("intervalo maior que 2 s acaba a disputa na hora", () => {
+  const d = createBattleDetector();
+  const t = { ms: 0 };
+  const order = cars("A", "B");
+  run(d, t, 6, order, { "B>A": 0.4 });
+  assert.equal(run(d, t, 0.5, order, { "B>A": 1.9 }).size, 2); // ate 2 s: espera os 10 s
+  assert.equal(run(d, t, 0.5, order, { "B>A": 2.3 }).size, 0); // passou de 2 s: sai na hora
 });
 
 test("ultrapassagem no meio da briga nao zera a contagem", () => {
@@ -59,18 +68,18 @@ test("ultrapassagem no meio da briga nao zera a contagem", () => {
 test("tres carros colados formam uma disputa so", () => {
   const d = createBattleDetector();
   const t = { ms: 0 };
-  assert.deepEqual(sorted(run(d, t, 11, cars("A", "B", "C"), { "B>A": 0.1, "C>B": 0.2 })), ["A", "B", "C"]);
+  assert.deepEqual(sorted(run(d, t, 6, cars("A", "B", "C"), { "B>A": 0.1, "C>B": 0.2 })), ["A", "B", "C"]);
 });
 
 test("sem intervalo medido, ou com buraco na ordem, nao ha disputa", () => {
   const d = createBattleDetector();
   const t = { ms: 0 };
-  assert.equal(run(d, t, 12, cars("A", "B"), {}).size, 0);
+  assert.equal(run(d, t, 7, cars("A", "B"), {}).size, 0);
   // B esta no box (fora da lista): A e C nao sao vizinhos de verdade
-  assert.equal(run(d, t, 12, cars("A", null, "C"), { "C>A": 0.1 }).size, 0);
-  // um carro da disputa entra no box: ela acaba depois dos 5 s
-  run(d, t, 11, cars("A", "B"), { "B>A": 0.2 });
-  assert.equal(run(d, t, 4, cars("A", null), {}).size, 2);
+  assert.equal(run(d, t, 7, cars("A", null, "C"), { "C>A": 0.1 }).size, 0);
+  // um carro da disputa entra no box: ela acaba depois dos 10 s
+  run(d, t, 6, cars("A", "B"), { "B>A": 0.2 });
+  assert.equal(run(d, t, 9, cars("A", null), {}).size, 2);
   assert.equal(run(d, t, 2, cars("A", null), {}).size, 0);
 });
 

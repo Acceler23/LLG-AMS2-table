@@ -50,7 +50,8 @@ function rebuildMatcher() {
     ((rltConfig.drivers && rltConfig.drivers.length) || (rltConfig.standingsRows && rltConfig.standingsRows.length));
   rltMatcher = hasDrivers
     ? LLGNames.createMatcher(LLGNames.buildPool(rltConfig), {
-        explicitMap: typeof RLT_INGAME_MAP !== "undefined" ? RLT_INGAME_MAP : null,
+        // ligacoes feitas a mao no painel (aba Pilotos) valem junto com o RLT_INGAME_MAP
+        explicitMap: Object.assign({}, typeof RLT_INGAME_MAP !== "undefined" ? RLT_INGAME_MAP : {}, (rltConfig && rltConfig.manualLinks) || {}),
       })
     : null;
   if (rltMatcher) rltMatcher.prime(standings.map((e) => e.name));
@@ -229,6 +230,15 @@ function infoKey(info) {
 // Devolve null sem temporada, ou:
 //   byClass:  Map(classe -> lista projetada, ordenada)   ("_all" sem classes)
 //   byDriver: Map(nome do RLT normalizado -> item da projecao)
+// Etapa em andamento, para o descarte da projecao: a etapa do calendario do
+// RLT na pista do jogo, ou a proxima ainda nao concluida.
+let latestTrackNames = [];
+function currentRoundNumber() {
+  const events = (rltConfig && rltConfig.events) || [];
+  const matched = LLGDisplay.matchEvent(events, latestTrackNames, Date.now());
+  return LLGPoints.currentRound(events, matched, Date.now());
+}
+
 function buildPoints() {
   const all = (rltConfig && rltConfig.standingsRows) || [];
   if (!all.length) return null;
@@ -271,6 +281,7 @@ function buildPoints() {
       classMode,
       inRace: isRace(),
       table,
+      currentRound: currentRoundNumber(),
       racePosOf: (r) => racePos.get(rowKey(r)) || null,
     });
     byClass.set(g, projected);
@@ -465,6 +476,11 @@ function handleStandings(payload) {
   }
   standings = list.filter((e) => e && e.name);
   latestGame = (!Array.isArray(payload) && payload && payload.game) || "ams2";
+  {
+    const s = (!Array.isArray(payload) && payload && payload.session) || {};
+    const t = LLGDisplay.trackDisplay(s.trackLocation, s.trackVariation);
+    latestTrackNames = [s.trackLocation, `${s.trackLocation || ""} ${s.trackVariation || ""}`, t.name];
+  }
   LLGDisplay.applyGameClassNames(standings, latestGame);
   gapTracker.update(standings, (!Array.isArray(payload) && payload && payload.ts) || Date.now());
   if (rltMatcher) rltMatcher.prime(standings.map((e) => e.name));

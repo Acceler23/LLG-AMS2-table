@@ -38,6 +38,73 @@
     return Number(table[pos - 1]) || 0;
   }
 
+  // Pontos do piloto se a corrida acabasse agora, respeitando o descarte.
+  //   row:          linha do RLT (standingsRows), com rounds e discard quando a
+  //                 temporada tem descarte
+  //   add:          pontos da posicao atual na corrida em andamento
+  //   currentRound: numero da etapa em andamento (ou null)
+  //   classMode:    usa os pontos de classe como base
+  // Sem descarte, e so a soma. Com descarte, refaz a conta: cada etapa (ou
+  // corrida) vale o que valeu, a etapa atual ganha os pontos da corrida, e os
+  // piores resultados saem. Assim, quem ja tinha uma etapa ruim descartada nao
+  // soma de novo pontos que vao acabar descartados. A diferenca entre o total
+  // oficial e a conta refeita sem a corrida (punicoes, ajustes) e mantida.
+  function projectedTotal(row, add, currentRound, classMode) {
+    const raw = classMode && row.classPointsRaw != null ? row.classPointsRaw : row.pointsRaw;
+    const base = Number(raw) || 0;
+    const extra = Number(add) || 0;
+    const rule = row && row.discard;
+    const rounds = row && Array.isArray(row.rounds) ? row.rounds : null;
+    if (!rule || !(rule.count > 0) || !rounds) return base + extra;
+
+    const keep = (values) => {
+      const sorted = values.slice().sort((a, b) => a - b);
+      return sorted.slice(Math.min(rule.count, Math.max(0, sorted.length - 1))).reduce((s, v) => s + v, 0);
+    };
+
+    let before;
+    let after;
+    if (String(rule.type).toLowerCase() === "races") {
+      // descarte por corrida: cada corrida e um resultado
+      const races = [];
+      rounds.forEach((r) => (r.races && r.races.length ? r.races : [r.points]).forEach((p) => races.push(Number(p) || 0)));
+      before = keep(races);
+      after = currentRound != null || extra ? keep(races.concat([extra])) : before;
+    } else {
+      // descarte por etapa: etapas que o piloto nao correu contam como 0
+      const byRound = new Map();
+      rounds.forEach((r) => byRound.set(Number(r.round), Number(r.points) || 0));
+      const cur = Number(currentRound);
+      const last = Math.max(0, ...byRound.keys(), Number.isFinite(cur) ? cur : 0);
+      const list = (withRace) => {
+        const out = [];
+        for (let n = 1; n <= last; n++) {
+          // a etapa atual so entra antes da corrida se ja tem pontos lancados
+          if (!withRace && n === cur && !byRound.has(n)) continue;
+          out.push((byRound.get(n) || 0) + (withRace && n === cur ? extra : 0));
+        }
+        return out;
+      };
+      before = keep(list(false));
+      after = Number.isFinite(cur) ? keep(list(true)) : before + extra;
+    }
+    return after + (base - before);
+  }
+
+  // Etapa em andamento: a que bate com a pista (matched, de LLGDisplay.matchEvent)
+  // ou, sem ela, a proxima etapa ainda nao concluida.
+  function currentRound(events, matched, nowMs) {
+    if (matched && matched.round != null) return matched.round;
+    const now = nowMs != null ? nowMs : Date.now();
+    const open = (events || []).filter((e) => String(e.completedStatus || "").toLowerCase() !== "completed" && e.round != null);
+    if (!open.length) return null;
+    const dist = (e) => {
+      const t = Date.parse(e.eventDate || "");
+      return Number.isNaN(t) ? Infinity : Math.abs(t - now);
+    };
+    return open.slice().sort((a, b) => dist(a) - dist(b) || a.round - b.round)[0].round;
+  }
+
   // Projecao do campeonato.
   //   rows:       linhas do RLT (standingsRows) do grupo que se quer ver
   //   classMode:  usa pontos/posicao de classe em vez de geral
@@ -54,7 +121,8 @@
       const base = Number(raw) || 0;
       const racePos = o.inRace && o.racePosOf ? o.racePosOf(row) : null;
       const add = racePos ? pointsForPosition(racePos, table) : 0;
-      return { row, base, add, total: base + add, racePos: racePos || null };
+      const total = o.inRace ? projectedTotal(row, add, o.currentRound, o.classMode) : base;
+      return { row, base, add: total - base, total, racePos: racePos || null };
     });
     const byBase = items.slice().sort((a, b) => b.base - a.base);
     byBase.forEach((it, i) => {
@@ -83,5 +151,5 @@
     return out;
   }
 
-  return { setConfig, pointsTable, pointsForPosition, project, windowAround };
+  return { setConfig, pointsTable, pointsForPosition, projectedTotal, currentRound, project, windowAround };
 });

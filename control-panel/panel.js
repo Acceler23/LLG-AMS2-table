@@ -50,6 +50,89 @@ function setTeamTint(value) {
   send("overlay.setTeamTint", { value: v / 100 });
 }
 
+// ---------------------------------------------------------------- Pilotos sem ligacao
+// O servidor diz quem da pista nao ligou com ninguem do RLT e quais pilotos do
+// lineup sobraram; aqui da para ligar a mao (ou ignorar o nome).
+function escapeAttr(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+function showLinks(body) {
+  if (!body) return;
+  const badge = document.getElementById("linksBadge");
+  const count = (body.unmatched || []).length;
+  badge.hidden = !count;
+  badge.textContent = String(count);
+
+  const box = document.getElementById("linksUnmatched");
+  if (!body.season) {
+    box.innerHTML = '<div class="muted">Aplique uma temporada para ver a ligação dos pilotos.</div>';
+  } else if (!count) {
+    box.innerHTML = '<div class="muted">Todos os pilotos da pista estão ligados.</div>';
+  } else {
+    const options = ['<option value="">— escolher piloto do lineup —</option>']
+      .concat((body.free || []).map((d) => `<option value="${escapeAttr(d.name)}">${escapeAttr(d.name)}${d.className ? " (" + escapeAttr(d.className) + ")" : ""}</option>`))
+      .concat(['<option value="__ignore__">Ignorar este nome</option>'])
+      .join("");
+    box.innerHTML = body.unmatched
+      .map(
+        (name) => `<div class="row">
+          <label style="min-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeAttr(name)}">${escapeAttr(name)}</label>
+          <select data-name="${escapeAttr(name)}" onchange="linkDriver(this)">${options}</select>
+        </div>`
+      )
+      .join("");
+  }
+
+  const manual = Object.entries(body.manual || {});
+  document.getElementById("linksManual").innerHTML = manual.length
+    ? manual
+        .map(
+          ([name, driver]) => `<div class="row">
+            <span style="flex:1">${escapeAttr(name)} → ${driver ? escapeAttr(driver) : '<span class="muted">ignorado</span>'}</span>
+            <button data-name="${escapeAttr(name)}" onclick="unlinkDriver(this)">Desfazer</button>
+          </div>`
+        )
+        .join("")
+    : '<div class="muted">Nenhum.</div>';
+}
+
+async function loadLinks() {
+  try {
+    showLinks(await api("/api/links"));
+  } catch (_) {}
+}
+
+async function linkDriver(sel) {
+  const name = sel.getAttribute("data-name");
+  if (!sel.value) return;
+  const driver = sel.value === "__ignore__" ? "" : sel.value;
+  try {
+    showLinks(await api("/api/links", { method: "POST", body: JSON.stringify({ name, driver }) }));
+    log(driver ? `Ligado: ${name} → ${driver}` : `Ignorado: ${name}`);
+  } catch (e) {
+    log("ERRO ao ligar piloto: " + e.message);
+  }
+}
+
+async function unlinkDriver(btn) {
+  const name = btn.getAttribute("data-name");
+  try {
+    showLinks(await api("/api/links", { method: "POST", body: JSON.stringify({ name, driver: null }) }));
+    log(`Ligação desfeita: ${name}`);
+  } catch (e) {
+    log("ERRO: " + e.message);
+  }
+}
+
+// atualiza sozinho; um menu aberto nao e redesenhado no meio da escolha
+loadLinks();
+setInterval(() => {
+  const active = document.activeElement;
+  if (active && active.tagName === "SELECT" && active.closest("#linksUnmatched")) return;
+  loadLinks();
+}, 3000);
+
 // ---------------------------------------------------------------- AMS2: carsets
 // O servidor baixa o carset da temporada e instala na pasta do jogo; aqui o
 // painel so escolhe a temporada e o modo, e acompanha o andamento.
@@ -307,6 +390,7 @@ async function saveKey() {
     log(`League ok. Seasons ativas: ${(body.seasons || []).length}`);
     renderSeasons(body.seasons || []);
     showRltStatus(body.status || {});
+    loadTrackStats();
   } catch (e) {
     log("ERRO key: " + e.message);
   }
@@ -495,6 +579,7 @@ async function saveFirstRunKey() {
     log(`Chave salva. Seasons ativas: ${(body.seasons || []).length}`);
     renderSeasons(body.seasons || []);
     showRltStatus(body.status || {});
+    loadTrackStats();
   } catch (e) {
     status.textContent = "Não funcionou: " + e.message;
   }
@@ -555,7 +640,50 @@ function fillLinks() {
   document.getElementById("linkTable").value = `${base}/overlay/timing-table.html`;
   document.getElementById("linkCard").value = `${base}/overlay/driver-card.html`;
   document.getElementById("linkDriver").value = `${base}/overlay/driver-table.html`;
+  document.getElementById("linkTrackStats").value = `${base}/overlay/track-stats.html`;
 }
+
+// ---------------------------------------------------------------- estatisticas da pista
+function showTrackStats(body) {
+  const keySel = document.getElementById("tsKey");
+  keySel.innerHTML = (body.multiseasons || [])
+    .map((m) => `<option value="${escapeAttr(m.key)}">${escapeAttr(m.name)}</option>`)
+    .join("");
+  if (!body.multiseasons || !body.multiseasons.length) keySel.innerHTML = `<option value="">All Seasons</option>`;
+  keySel.value = body.key || "";
+  document.getElementById("tsStat").value = body.stat || "winners";
+  const trackSel = document.getElementById("tsTrack");
+  const tracks = (body.tracks || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  trackSel.innerHTML =
+    `<option value="">Automático (pista do jogo)</option>` +
+    tracks.map((t) => `<option value="${t.trackId}">${escapeAttr(t.name)}${t.totalEvents ? "" : " (sem etapas)"}</option>`).join("");
+  trackSel.value = body.trackId != null ? String(body.trackId) : "";
+  document.getElementById("tsStatus").textContent = !body.hasKey
+    ? "Precisa da chave do RLT."
+    : body.error
+      ? "Erro ao ler o RLT: " + body.error
+      : `${tracks.length} pistas neste multiseason.`;
+}
+
+async function loadTrackStats() {
+  try {
+    showTrackStats(await api("/api/trackstats"));
+  } catch (e) {
+    document.getElementById("tsStatus").textContent = "Erro: " + e.message;
+  }
+}
+
+async function setTrackStats(patch) {
+  try {
+    if (patch.trackId === "") patch.trackId = null;
+    await api("/api/trackstats", { method: "POST", body: JSON.stringify(patch) });
+    await loadTrackStats();
+  } catch (e) {
+    log("ERRO estatisticas da pista: " + e.message);
+  }
+}
+
+loadTrackStats();
 
 async function copyLink(id) {
   const input = document.getElementById(id);

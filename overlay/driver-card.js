@@ -36,7 +36,8 @@ function rebuildRltMatcher() {
     ((rltConfig.drivers && rltConfig.drivers.length) || (rltConfig.standingsRows && rltConfig.standingsRows.length));
   rltMatcher = hasDrivers
     ? LLGNames.createMatcher(LLGNames.buildPool(rltConfig), {
-        explicitMap: typeof RLT_INGAME_MAP !== "undefined" ? RLT_INGAME_MAP : null,
+        // ligacoes feitas a mao no painel (aba Pilotos) valem junto com o RLT_INGAME_MAP
+        explicitMap: Object.assign({}, typeof RLT_INGAME_MAP !== "undefined" ? RLT_INGAME_MAP : {}, (rltConfig && rltConfig.manualLinks) || {}),
       })
     : null;
   if (rltMatcher) rltMatcher.prime(latestStandings.map((e) => e.name));

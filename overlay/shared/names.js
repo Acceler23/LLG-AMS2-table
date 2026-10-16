@@ -8,9 +8,15 @@
 })(typeof self !== "undefined" ? self : this, function () {
   const DEFAULT_MIN_SCORE = 0.98;
 
+  // Nome comparavel: sem acento, sem pontuacao, minusculo. Tambem tira as
+  // etiquetas de categoria que os pilotos poem no nome do jogo, entre colchetes
+  // ou parenteses ("Nei Alves [AM]", "Daniel_Moura(AM)"), e separa nomes
+  // grudados com maiuscula no meio ("LeonardoBorges" -> "leonardo borges").
   function normalizeName(name) {
     return String(name || "")
       .replace(/\[[^\]]*\]/g, "")
+      .replace(/\([^)]*\)/g, "")
+      .replace(/([a-zà-ÿ])([A-ZÀ-Þ])/g, "$1 $2")
       .replace(/[​-‍﻿­]/g, "")
       .normalize("NFD")
       .replace(/[̀-ͯ]/g, "")
@@ -99,6 +105,8 @@
     // identico a um nome completo vale 1; identico apenas ao sobrenome ou ao
     // primeiro nome vale menos, para o nome completo de outro carro vencer
     if (target === al) return aliasIsPartial ? 0.99 : 1;
+    // mesmo nome com ou sem espaco ("jhonismicael" e "jhonis micael")
+    if (!aliasIsPartial && target.replace(/ /g, "") === al.replace(/ /g, "")) return 0.995;
     let score = nameSimilarity(target, al);
     const alTokens = al.split(" ").filter(Boolean);
 
@@ -247,9 +255,32 @@
       return -1;
     }
 
+    // Nome marcado como "ignorar" (valor vazio na lista): nunca e ligado.
+    function isIgnored(raw) {
+      if (!explicitMap) return false;
+      const rawN = normalizeName(raw);
+      return Object.keys(explicitMap).some((k) => normalizeName(k) === rawN && !normalizeName(explicitMap[k]));
+    }
+
+    // Nome no jogo cadastrado no RLT identico ao do jogo: vem antes de qualquer
+    // comparacao aproximada (sem diferenciar maiusculas, acentos e pontuacao).
+    function exactInGame(raw) {
+      const rawN = normalizeName(raw);
+      if (!rawN) return [];
+      const hits = [];
+      prepared.forEach((p, i) => {
+        const list = [p.d.inGameName].concat((p.d.inGameNames || []).map((x) => (x && x.name) || x));
+        if (list.some((n) => n && normalizeName(n) === rawN)) hits.push(i);
+      });
+      return hits;
+    }
+
     function rank(raw) {
+      if (isIgnored(raw)) return [];
       const ex = findExplicit(raw);
       if (ex >= 0) return [{ i: ex, score: 2 }];
+      const exact = exactInGame(raw);
+      if (exact.length === 1) return [{ i: exact[0], score: 1.5 }];
       const targets = nameCandidates(raw).filter((t) => t && t !== "player");
       const best = new Map();
       for (const target of targets) {
@@ -304,7 +335,26 @@
       return assigned.get(key) || null;
     }
 
-    return { prime, lookup };
+    // Situacao da ligacao: quem do jogo ficou com quem, quem ficou sem, quem
+    // foi ignorado, e os pilotos do RLT que nao ficaram com ninguem.
+    function status() {
+      const taken = new Set(Array.from(assigned.values()));
+      const unmatched = [];
+      const ignored = [];
+      known.forEach((_, raw) => {
+        if (assigned.has(raw)) return;
+        if (isIgnored(raw)) ignored.push(raw);
+        else unmatched.push(raw);
+      });
+      return {
+        linked: Array.from(assigned, ([raw, d]) => ({ name: raw, driver: d })),
+        unmatched,
+        ignored,
+        freeDrivers: prepared.map((p) => p.d).filter((d) => !taken.has(d)),
+      };
+    }
+
+    return { prime, lookup, status };
   }
 
   return {

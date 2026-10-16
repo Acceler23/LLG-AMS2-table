@@ -1,5 +1,8 @@
 const BASE = "https://www.racingleaguetools.com";
 const REFRESH_MS = 5 * 60 * 1000;
+// Enquanto ha piloto na pista sem ligacao com o RLT, a temporada e relida bem
+// mais vezes, para pegar logo um nome no jogo cadastrado ou um reserva novo.
+const FAST_REFRESH_MS = 30 * 1000;
 
 const { normalizeName } = require("../overlay/shared/names");
 const { normalizeColor } = require("../overlay/shared/colors");
@@ -189,6 +192,7 @@ function lineupSeatsToDrivers(lineups) {
     .map((seat) => {
       const team = seat.team || seat.Team || null;
       return {
+        driverId: seat.driverId != null ? seat.driverId : seat.DriverId != null ? seat.DriverId : null,
         driverName: seat.driverName || seat.DriverName,
         driverInfo: seat.driverInfo || seat.DriverInfo || {},
         seatType: seat.seatType || seat.SeatType || null,
@@ -199,6 +203,49 @@ function lineupSeatsToDrivers(lineups) {
           : null,
       };
     });
+}
+
+// Nome no jogo de cada piloto: o RLT so informa no perfil do piloto
+// (/drivers/{id}), nao no lineup nem na pontuacao. Muda pouco, entao cada
+// perfil e guardado por um tempo e so buscado de novo depois disso.
+const PROFILE_TTL_MS = 10 * 60 * 1000;
+const FAST_PROFILE_TTL_MS = 25 * 1000; // perfis de quem ainda nao ligou, no modo rapido
+let fastRefresh = false;
+let fastProfileIds = new Set(); // pilotos do lineup ainda sem ligacao
+const driverProfiles = new Map(); // driverId -> { at, inGameName, inGameNames }
+
+async function fetchDriverProfile(driverId) {
+  const have = driverProfiles.get(driverId);
+  const ttl = fastRefresh && fastProfileIds.has(driverId) ? FAST_PROFILE_TTL_MS : PROFILE_TTL_MS;
+  if (have && Date.now() - have.at < ttl) return have;
+  try {
+    const data = unwrap(await rltFetch(`/api/public/v1/drivers/${driverId}`));
+    const info = {
+      at: Date.now(),
+      inGameName: (data && (data.inGameName || data.InGameName)) || null,
+      inGameNames: (data && (data.inGameNames || data.InGameNames)) || null,
+    };
+    driverProfiles.set(driverId, info);
+    return info;
+  } catch (_) {
+    return have || null; // sem resposta agora: fica com o que ja tinha
+  }
+}
+
+// Acrescenta o nome no jogo aos pilotos do lineup (5 perfis por vez).
+async function attachInGameNames(lineupDrivers) {
+  const list = lineupDrivers.filter((d) => d.driverId != null);
+  for (let i = 0; i < list.length; i += 5) {
+    await Promise.all(
+      list.slice(i, i + 5).map(async (d) => {
+        const profile = await fetchDriverProfile(d.driverId);
+        if (!profile) return;
+        if (profile.inGameName) d.inGameName = profile.inGameName;
+        if (profile.inGameNames) d.inGameNames = profile.inGameNames;
+      })
+    );
+  }
+  return lineupDrivers;
 }
 
 // Junta o lineup com a pontuacao: quem so esta no lineup entra na lista (sem
@@ -221,6 +268,8 @@ function mergeLineupIntoStandings(standings, lineupDrivers) {
     if (!have.classInfo && !have.ClassInfo && d.classInfo) have.classInfo = d.classInfo;
     if (!have.teamName && d.teamName) have.teamName = d.teamName;
     if (!have.teamInfo && !have.TeamInfo && d.teamInfo) have.teamInfo = d.teamInfo;
+    if (!have.inGameName && !have.InGameName && d.inGameName) have.inGameName = d.inGameName;
+    if (!have.inGameNames && !have.InGameNames && d.inGameNames) have.inGameNames = d.inGameNames;
   });
   if (stats.driverStandings) stats.driverStandings = base;
   else out.driverStandings = base;
@@ -431,6 +480,7 @@ function buildDrivers(standingsData, classes) {
     color = normalizeColor(color);
 
     list.push({
+      driverId: d.driverId != null ? d.driverId : null,
       uniqueName: (cls && cls.uniqueName) || (info && info.uniqueName) || "—",
       name: (cls && cls.name) || (info && info.name) || "—",
       abbreviation: (cls && cls.abbreviation) || (info && info.abbreviation) || null,
@@ -477,8 +527,50 @@ function parsePoints(p) {
   };
 }
 
+// Pontos de cada etapa (e de cada corrida) do piloto, para a projecao com
+// descarte. O RLT da 0 em "pointsEarned" na etapa descartada; os pontos de
+// verdade dela estao em discardInfo.discardedItems.
+function driverRounds(d) {
+  const events = d.events || d.Events || [];
+  const info = d.discardInfo || d.DiscardInfo || {};
+  const dropped = info.discardedItems || info.DiscardedItems || [];
+  return events
+    .map((e) => {
+      const round = e.roundNumber != null ? e.roundNumber : e.round;
+      let points = parsePoints(e.pointsEarned).raw;
+      if (e.isDiscarded) {
+        const name = String(e.eventName || e.trackName || "").toLowerCase();
+        const date = String(e.eventDate || "").slice(0, 10);
+        const hit = dropped.find((x) => String(x.name || "").toLowerCase() === name && (!date || String(x.date || "").slice(0, 10) === date)) ||
+          dropped.find((x) => String(x.name || "").toLowerCase() === name);
+        if (hit) points = parsePoints(hit.discardedPoints).raw;
+      }
+      const races = (e.races || []).map((r) => parsePoints(r.pointsEarned).raw);
+      return { round, points, discarded: !!e.isDiscarded, races };
+    })
+    .filter((r) => r.round != null);
+}
+
+// Regra de descarte da temporada: quantos resultados (etapas ou corridas) sao
+// jogados fora. O RLT nao informa a regra, so o que ja foi descartado de cada
+// piloto; o maior numero entre todos e o limite da temporada.
+function seasonDiscard(drivers) {
+  let enabled = false;
+  let type = null;
+  let count = 0;
+  drivers.forEach((d) => {
+    const info = d.discardInfo || d.DiscardInfo;
+    if (!info || !info.isDiscardEnabled) return;
+    enabled = true;
+    type = type || info.discardType || "Events";
+    count = Math.max(count, Number(info.discardedCount) || 0);
+  });
+  return enabled && count > 0 ? { type, count } : null;
+}
+
 function buildStandingsRows(standingsData, classes) {
   const drivers = collectDriverStandings(standingsData);
+  const discard = seasonDiscard(drivers);
   const classMap = collectClassStandingsMap(standingsData);
   const classByUnique = {};
   (classes || []).forEach((c) => {
@@ -544,6 +636,9 @@ function buildStandingsRows(standingsData, classes) {
       pointsRaw: ptsOverall.raw,
       classPoints: ptsClass.text,
       classPointsRaw: ptsClass.raw,
+      // pontos por etapa e regra de descarte (projecao em overlay/shared/points.js)
+      rounds: discard ? driverRounds(d) : null,
+      discard,
       gapToLeader: d.gapToLeader || null,
       gapToAhead: d.gapToAhead || null,
       positionChange: d.positionChange != null ? d.positionChange : null,
@@ -597,7 +692,8 @@ async function selectSeason(seasonId) {
   } catch (_) {
     lineups = null;
   }
-  const lineupDrivers = lineupSeatsToDrivers(lineups).concat(collectLineupDrivers(detail));
+  // nome no jogo de cada um, que o RLT so da no perfil do piloto
+  const lineupDrivers = (await attachInGameNames(lineupSeatsToDrivers(lineups))).concat(collectLineupDrivers(detail));
   standings = mergeLineupIntoStandings(standings, lineupDrivers);
   cache.drivers = buildDrivers(standings, classes);
   cache.standingsRows = buildStandingsRows(standings, classes);
@@ -625,7 +721,26 @@ function startRefresh() {
   if (!hasKey()) return;
   refreshTimer = setInterval(() => {
     refresh().catch(() => {});
-  }, REFRESH_MS);
+  }, fastRefresh ? FAST_REFRESH_MS : REFRESH_MS);
+}
+
+// Liga/desliga a releitura rapida. driverIds: pilotos do lineup sem ligacao
+// (so os perfis deles sao relidos a cada vez).
+function setFastRefresh(on, driverIds) {
+  fastProfileIds = new Set(driverIds || []);
+  if (!!on === fastRefresh) return;
+  fastRefresh = !!on;
+  if (refreshTimer) startRefresh();
+}
+
+// Ligacoes feitas a mao no painel: { temporada: { "nome no jogo": "piloto do RLT" ou "" (ignorar) } }
+let manualLinksBySeason = {};
+function setManualLinks(all) {
+  manualLinksBySeason = all || {};
+}
+
+function getManualLinks() {
+  return (selectedSeasonId && manualLinksBySeason[selectedSeasonId]) || {};
 }
 
 function stopRefresh() {
@@ -657,6 +772,7 @@ function getOverlayPayload() {
     drivers: cache.drivers || [],
     standingsRows: cache.standingsRows || [],
     events: cache.events || [],
+    manualLinks: getManualLinks(),
   };
 }
 
@@ -674,7 +790,25 @@ function getStatus() {
 
 
 
+// ---- multiseasons (overlay de estatisticas da pista) ----
+async function fetchMultiseasons() {
+  return unwrap(await rltFetch("/api/public/v1/multiseasons"));
+}
+
+// key vazia = o multiseason padrao (All Seasons)
+async function fetchMultiseasonStatistics(key) {
+  const base = key ? `/api/public/v1/multiseasons/${encodeURIComponent(key)}/statistics` : "/api/public/v1/multiseasons/statistics";
+  return unwrap(await rltFetch(`${base}?includeTrackStats=true`));
+}
+
 module.exports = {
+  fetchMultiseasons,
+  fetchMultiseasonStatistics,
+  setFastRefresh,
+  setManualLinks,
+  getManualLinks,
+  driverRounds,
+  seasonDiscard,
   seasonEvents,
   eventDetailInfo,
   lineupSeatsToDrivers,

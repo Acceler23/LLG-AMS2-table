@@ -259,6 +259,32 @@
     return hits.slice().sort((a, b) => done(a) - done(b) || distance(a) - distance(b) || (a.round || 0) - (b.round || 0))[0];
   }
 
+  // Procura, nas pistas de um multiseason do RLT, a pista do jogo.
+  //   tracks:     pistas do multiseason (com name, trackName, circuitName,
+  //               circuitOrigin, uniqueName, totalEvents)
+  //   names:      nomes da pista no jogo, como no matchEvent
+  //   uniqueName: o da etapa do RLT que bateu com a pista (opcional); quando
+  //               existe, vale ele, que e exato
+  // Nome igual tem prioridade sobre "um contem o outro" ("Interlagos" nao
+  // pega "Interlagos SCB" se as duas existirem). No empate, a pista com mais
+  // etapas. Sem nenhuma, devolve null.
+  function matchTrack(tracks, names, uniqueName) {
+    const list = tracks || [];
+    if (uniqueName) {
+      const exact = list.find((t) => t.uniqueName && String(t.uniqueName).toLowerCase() === String(uniqueName).toLowerCase());
+      if (exact) return exact;
+    }
+    const mine = (names || []).map(trackKey).filter(Boolean);
+    if (uniqueName) mine.unshift(trackKey(uniqueName));
+    if (!mine.length) return null;
+    const keys = (t) => [t.circuitName, t.trackName, t.name, t.circuitOrigin, t.uniqueName].map(trackKey).filter(Boolean);
+    const best = (hits) => (hits.length ? hits.slice().sort((a, b) => (b.totalEvents || 0) - (a.totalEvents || 0))[0] : null);
+    return (
+      best(list.filter((t) => keys(t).some((k) => mine.includes(k)))) ||
+      best(list.filter((t) => keys(t).some((k) => mine.some((m) => sameTrack(k, m)))))
+    );
+  }
+
   // Pais como o RLT informa (em ingles) -> portugues. O que nao estiver aqui
   // aparece como veio.
   const COUNTRIES_PT = {
@@ -309,6 +335,8 @@
     setConfig,
     trackDisplay,
     matchEvent,
+    matchTrack,
+    trackKey,
     countryName,
     flagFile,
     heatNumber,

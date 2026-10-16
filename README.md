@@ -365,12 +365,13 @@ para página, coluna e destaque.
 - `p` liga/desliga o destaque do piloto em foco (o jogo não diferencia pilotar de espectar, só qual carro a câmera está olhando).
 - `0` alterna entre a tabela de tempos e a tela de **pontuação** do campeonato (colunas: Pts / Pts proj. / Gap líder).
 - `9` liga e desliga a página de **disputas**, só em corrida: os carros que
-  ficam pelo menos 10 s com menos de 0,3 s de intervalo para o da frente são
-  destacados (e deixam de ser depois de 5 s fora disso), a velocidade deles
-  aparece ao lado da tabela, e a parte da tabela que fica rodando trava onde
-  houver disputa. Ela desliga sozinha ao fim da corrida e quando o safety car
-  entra. No painel dá para escolher entre a tabela toda (0,3 s) e só as
-  disputas do piloto assistido (com 0,5 s).
+  ficam pelo menos 5 s com menos de 0,6 s de intervalo para o da frente são
+  destacados, e deixam de ser depois de 10 s fora disso (ou na hora, se o
+  intervalo passar de 2 s). A velocidade deles aparece ao lado da tabela, e a
+  parte da tabela que fica rodando trava onde houver disputa. Ela desliga
+  sozinha ao fim da corrida e quando o safety car entra. No painel dá para
+  escolher entre a tabela toda (0,6 s) e só as disputas do piloto assistido
+  (com 1 s).
 
 **Alternância automática**: no painel, "Alternar colunas sozinho" faz a tabela
 passar sozinha pelas colunas da direita (Intervalo, Gap líder, Última volta...),

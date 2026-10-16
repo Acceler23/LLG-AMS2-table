@@ -80,3 +80,27 @@ test("detalhe do evento: pais e baterias em ordem, com a marca de resultado lanc
   assert.equal(rlt.eventDetailInfo(detail, "Completed").final, true);
   assert.deepEqual(rlt.eventDetailInfo(null, null).races, []);
 });
+
+test("nome no jogo do perfil do piloto vira apelido, tambem para quem ja esta na pontuacao", () => {
+  const seats = rlt.lineupSeatsToDrivers({
+    seats: [
+      { driverId: 537, driverName: "Daniel Benevides", driverInfo: { firstName: "Daniel", lastName: "Benevides" }, classInfo: { name: "Amador", uniqueName: "am" } },
+      { driverId: 466, driverName: "Daniel Moura", driverInfo: { firstName: "Daniel", lastName: "Moura" }, classInfo: { name: "Amador", uniqueName: "am" } },
+    ],
+  });
+  assert.equal(seats[0].driverId, 537);
+  // o que attachInGameNames poe a partir do perfil (/drivers/{id})
+  seats[0].inGameName = "Benevoid";
+  seats[0].inGameNames = [{ name: "Benevoid" }];
+  seats[1].inGameName = "Daniel_Moura";
+  // Daniel Moura ja correu: esta na pontuacao, sem o nome no jogo
+  const st = { driverStandings: [{ driverName: "Daniel Moura", driverInfo: { firstName: "Daniel", lastName: "Moura" }, position: 1, points: 10 }] };
+  const merged = rlt.mergeLineupIntoStandings(st, seats);
+  const drivers = rlt.buildDrivers(merged, []);
+  const benevides = drivers.find((d) => d.displayName === "Daniel Benevides");
+  const moura = drivers.find((d) => d.displayName === "Daniel Moura");
+  assert.ok(benevides.aliases.includes("benevoid"));
+  assert.equal(benevides.inGameName, "Benevoid");
+  assert.ok(moura.aliases.includes("daniel moura"));
+  assert.equal(moura.inGameName, "Daniel_Moura"); // veio do lineup para a linha da pontuacao
+});

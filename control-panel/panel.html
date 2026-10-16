@@ -20,6 +20,7 @@
     .tab { margin: 0; padding: 10px 13px; background: #1a1a1a; color: #aaa; border: 1px solid #333; border-bottom: none; border-radius: 8px 8px 0 0; font-weight: 700; }
     .tab.active { background: #0b5ed7; color: #fff; border-color: #0b5ed7; }
     .tab-page { display: none; padding-top: 12px; }
+    .badge { display: inline-block; min-width: 18px; padding: 1px 6px; margin-left: 4px; border-radius: 9px; background: #ff5a5a; color: #fff; font-size: 11px; }
     .tab-page.active { display: block; }
     #firstRun { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.85); align-items: center; justify-content: center; padding: 16px; }
     .first-run-card { background: #1a1a1a; border: 1px solid #444; border-radius: 8px; padding: 20px; max-width: 460px; width: 100%; }
@@ -59,6 +60,7 @@
   <div class="tabs">
     <button class="tab" data-tab="piloto" onclick="showTab('piloto')">Piloto</button>
     <button class="tab" data-tab="transmissao" onclick="showTab('transmissao')">Transmissão</button>
+    <button class="tab" data-tab="pilotos" onclick="showTab('pilotos')">Pilotos <span id="linksBadge" class="badge" hidden></span></button>
     <button class="tab" data-tab="ams2" onclick="showTab('ams2')">AMS2</button>
     <button class="tab" data-tab="acc" onclick="showTab('acc')">ACC</button>
     <button class="tab" data-tab="config" onclick="showTab('config')">Configuração</button>
@@ -127,7 +129,7 @@
       </div>
       <div class="row wrap">
         <button onclick="send('overlay.toggleHighlight')">Destaque ( P )</button>
-        <button onclick="send('overlay.toggleBattles')" title="Só em corrida e sem safety car. Destaca os carros que ficam 10 s com menos de 0,3 s de intervalo, mostra a velocidade deles ao lado da tabela e trava a parte da tabela que fica rodando onde houver disputa.">Disputas ( 9 )</button>
+        <button onclick="send('overlay.toggleBattles')" title="Só em corrida e sem safety car. Destaca os carros que ficam 5 s com menos de 0,6 s de intervalo (e deixam de ser depois de 10 s fora disso, ou na hora se abrir mais de 2 s), mostra a velocidade deles ao lado da tabela e trava a parte da tabela que fica rodando onde houver disputa.">Disputas ( 9 )</button>
         <button onclick="send('race.reset')" title="Recalcula posições de largada e zera paradas/stint. Use no grid se a overlay foi aberta no meio da sessão.">Zerar largada e paradas</button>
       </div>
       <div class="row">
@@ -155,8 +157,8 @@
       <div class="row">
         <label class="muted" style="min-width:140px" title="O que a página de disputas (tecla 9) destaca.">Disputas ( 9 )</label>
         <select id="battleScope" onchange="setBattleScope(this.value)">
-          <option value="all">Tabela toda, intervalo menor que 0,3 s</option>
-          <option value="focus">Só o piloto assistido, intervalo menor que 0,5 s</option>
+          <option value="all">Tabela toda, intervalo menor que 0,6 s</option>
+          <option value="focus">Só o piloto assistido, intervalo menor que 1 s</option>
         </select>
       </div>
       <div class="row">
@@ -167,6 +169,33 @@
         <input id="altSeconds" type="range" min="5" max="120" step="5" value="20" oninput="showAlternateSeconds(this.value)" onchange="setAlternate()" />
         <span id="altSecondsVal" class="muted" style="min-width:36px">20 s</span>
       </div>
+    </div>
+
+    <h3>Estatísticas da pista</h3>
+    <div class="box">
+      <div class="muted">Overlay com os 5 primeiros de um dado da pista, tirado de um multiseason do RLT. Tamanho sugerido da fonte no OBS: 420×300.</div>
+      <div class="row">
+        <label class="muted" style="min-width:90px">Link</label>
+        <input id="linkTrackStats" type="text" readonly onclick="this.select()" />
+        <button onclick="copyLink('linkTrackStats')">Copiar</button>
+      </div>
+      <div class="row">
+        <label class="muted" style="min-width:140px">Multiseason</label>
+        <select id="tsKey" onchange="setTrackStats({ key: this.value })"></select>
+      </div>
+      <div class="row">
+        <label class="muted" style="min-width:140px">Dado</label>
+        <select id="tsStat" onchange="setTrackStats({ stat: this.value })">
+          <option value="winners">Últimos vencedores (corrida)</option>
+          <option value="poles">Últimas poles (com o tempo)</option>
+          <option value="records">Recordes da pista (quali, corrida e velocidade máxima)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="muted" style="min-width:140px" title="No automático vale a pista do jogo (com temporada aplicada, a da etapa do RLT).">Pista</label>
+        <select id="tsTrack" onchange="setTrackStats({ trackId: this.value })"></select>
+      </div>
+      <div class="muted" id="tsStatus"></div>
     </div>
 
     <h3>Aparência</h3>
@@ -200,6 +229,21 @@
       <div class="sub">Logo de uma equipe</div>
       <div class="muted">Escolha a equipe e informe o arquivo em teams/ (ex: minha_equipe.png). Vazio = padrão.</div>
       <div id="teamLogos"></div>
+    </div>
+  </section>
+
+  <!-- =============================== PILOTOS =============================== -->
+  <section class="tab-page" data-tab="pilotos">
+    <div class="muted">Pilotos da pista que não foram ligados a ninguém da temporada no Racing League Tools. Enquanto houver algum, o RLT é relido a cada 30 s. Para ligar à mão, escolha o piloto do lineup; a escolha fica salva para esta temporada.</div>
+
+    <h3>Sem ligação</h3>
+    <div class="box">
+      <div id="linksUnmatched"></div>
+    </div>
+
+    <h3>Ligados à mão ou ignorados</h3>
+    <div class="box">
+      <div id="linksManual"></div>
     </div>
   </section>
 

@@ -98,3 +98,59 @@ test("buildPool junta drivers e standingsRows sem duplicar", () => {
   assert.equal(pool.length, 2);
   assert.equal(pool[1].uniqueName, "GT4");
 });
+
+test("nomes do jogo com etiqueta entre parenteses, grudados ou sem espaco", () => {
+  const N = require("../overlay/shared/names");
+  assert.equal(N.normalizeName("Daniel_Moura(AM)"), "daniel moura");
+  assert.equal(N.normalizeName("LeonardoBorges[AM]"), "leonardo borges");
+  assert.equal(N.normalizeName("JoãoCastro"), "joao castro");
+  const pool = [
+    { displayName: "Daniel Moura", firstName: "Daniel", lastName: "Moura", aliases: ["daniel moura"] },
+    { displayName: "Leonardo Borges", firstName: "Leonardo", lastName: "Borges", aliases: ["leonardo borges"] },
+    { displayName: "Jhonis Micael", firstName: "Jhonis", lastName: "Micael", aliases: ["jhonis micael"] },
+  ];
+  const m = N.createMatcher(pool);
+  const names = ["Daniel_Moura(AM)", "LeonardoBorges[AM]", "jhonismicael", "Benevoid"];
+  m.prime(names);
+  assert.equal(m.lookup("Daniel_Moura(AM)").displayName, "Daniel Moura");
+  assert.equal(m.lookup("LeonardoBorges[AM]").displayName, "Leonardo Borges");
+  assert.equal(m.lookup("jhonismicael").displayName, "Jhonis Micael");
+  assert.equal(m.lookup("Benevoid"), null); // apelido sem relacao com o nome: so pelo RLT_INGAME_MAP
+});
+
+test("nome no jogo identico vem antes da comparacao aproximada", () => {
+  const N = require("../overlay/shared/names");
+  // "Rafa" no jogo e o nome no jogo cadastrado do Rafael Silva, mas o nome
+  // parece mais com o do Rafa Souza; o nome no jogo identico deve ganhar
+  const pool = [
+    { displayName: "Rafa Souza", firstName: "Rafa", lastName: "Souza", aliases: ["rafa souza", "rafa"] },
+    { displayName: "Rafael Silva", firstName: "Rafael", lastName: "Silva", inGameName: "Rafa", aliases: ["rafael silva", "rafa"] },
+  ];
+  const m = N.createMatcher(pool);
+  m.prime(["Rafa"]);
+  assert.equal(m.lookup("Rafa").displayName, "Rafael Silva");
+});
+
+test("lista do painel: ligar a mao, ignorar e situacao da ligacao", () => {
+  const N = require("../overlay/shared/names");
+  const pool = [
+    { displayName: "Joao Alonso", firstName: "Joao", lastName: "Alonso", inGameName: "joao2000alonso", aliases: ["joao alonso"] },
+    { displayName: "Ana Lima", firstName: "Ana", lastName: "Lima", aliases: ["ana lima"] },
+    { displayName: "Beto Reis", firstName: "Beto", lastName: "Reis", aliases: ["beto reis"] },
+  ];
+  const names = ["joao200alonso", "Ana Lima", "CAPITAOVIPS"];
+  let m = N.createMatcher(pool);
+  m.prime(names);
+  let st = m.status();
+  assert.deepEqual(st.unmatched.sort(), ["CAPITAOVIPS", "joao200alonso"]);
+  assert.deepEqual(st.freeDrivers.map((d) => d.displayName).sort(), ["Beto Reis", "Joao Alonso"]);
+  // no painel: joao200alonso e o Joao Alonso; CAPITAOVIPS ignorado
+  m = N.createMatcher(pool, { explicitMap: { joao200alonso: "Joao Alonso", CAPITAOVIPS: "" } });
+  m.prime(names);
+  st = m.status();
+  assert.equal(m.lookup("joao200alonso").displayName, "Joao Alonso");
+  assert.equal(m.lookup("CAPITAOVIPS"), null);
+  assert.deepEqual(st.unmatched, []);
+  assert.deepEqual(st.ignored, ["CAPITAOVIPS"]);
+  assert.deepEqual(st.freeDrivers.map((d) => d.displayName), ["Beto Reis"]);
+});

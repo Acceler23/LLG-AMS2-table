@@ -222,7 +222,8 @@ function rebuildRltMatcher() {
     ((rltConfig.drivers && rltConfig.drivers.length) || (rltConfig.standingsRows && rltConfig.standingsRows.length));
   rltMatcher = hasDrivers
     ? LLGNames.createMatcher(LLGNames.buildPool(rltConfig), {
-        explicitMap: typeof RLT_INGAME_MAP !== "undefined" ? RLT_INGAME_MAP : null,
+        // ligacoes feitas a mao no painel (aba Pilotos) valem junto com o RLT_INGAME_MAP
+        explicitMap: Object.assign({}, typeof RLT_INGAME_MAP !== "undefined" ? RLT_INGAME_MAP : {}, (rltConfig && rltConfig.manualLinks) || {}),
         minScore: RLT_MATCH_MIN,
       })
     : null;
@@ -1588,6 +1589,7 @@ function renderStandings(standings) {
   const displayList = buildStandingsDisplayList(standings);
 
   const inRace = isRaceSession();
+  const roundNow = LLGPoints.currentRound((rltConfig && rltConfig.events) || [], latestEvent, Date.now());
   const projected = new Map();
   displayList.forEach((item) => {
     if (item.type !== "row") return;
@@ -1596,7 +1598,9 @@ function renderStandings(standings) {
       : Number(item.row.pointsRaw) || 0;
     const racePos = lookupLivePos(item.row, liveMap);
     const add = inRace && racePos ? racePointsForPos(racePos) : 0;
-    projected.set(item.row, { base, add, total: base + add, racePos });
+    // com descarte, a conta e refeita etapa por etapa (overlay/shared/points.js)
+    const total = inRace ? LLGPoints.projectedTotal(item.row, add, roundNow, item.classMode) : base;
+    projected.set(item.row, { base, add: total - base, total, racePos });
   });
 
   // ranking atual vs projetado por grupo
@@ -1759,16 +1763,16 @@ function renderStandings(standings) {
 // Relogio da volta mais rapida: fica ao lado da tabela, na altura da linha do
 // piloto que tem a melhor volta da corrida. So aparece em corrida.
 // ---- pagina de disputas (tecla 9, so em corrida) ----
-// Destaca os carros que ficam pelo menos 10 s colados no da frente
+// Destaca os carros que ficam pelo menos 5 s colados no da frente
 // (shared/battles.js), mostra a velocidade deles ao lado da tabela e trava a
 // parte rotativa da tabela onde houver disputa.
 let battleMode = false;
 let battleNames = new Set();
 let latestScOut = false; // safety car na pista (AMS2 e LMU informam)
 // Alcance da pagina, escolhido no painel:
-//   "all"   a tabela toda, com intervalo de 0,3 s
-//   "focus" so as disputas do piloto assistido, com intervalo de 0,5 s
-const BATTLE_SCOPES = { all: 0.3, focus: 0.5 };
+//   "all"   a tabela toda, com intervalo de 0,6 s
+//   "focus" so as disputas do piloto assistido, com intervalo de 1 s
+const BATTLE_SCOPES = { all: 0.6, focus: 1 };
 const BATTLE_SCOPE_KEY = "battleScope";
 let battleScope = "all";
 try {
@@ -1815,7 +1819,7 @@ function updateBattles(standings) {
     return;
   }
   // A deteccao roda a corrida toda, mesmo com a pagina desligada: como uma
-  // disputa leva 10 s para ser reconhecida, ao apertar 9 as que ja estao
+  // disputa leva 5 s para ser reconhecida, ao apertar 9 as que ja estao
   // acontecendo aparecem na hora.
   const now = Date.now();
   const gapOf = (behind, ahead) => {
