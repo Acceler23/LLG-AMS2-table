@@ -8,6 +8,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("llgApp", {
   info: () => ipcRenderer.invoke("app:info"),
   openPath: (target) => ipcRenderer.invoke("app:openPath", target),
+  // procura uma versao nova no GitHub; devolve o texto do resultado
+  checkUpdate: () => ipcRenderer.invoke("update:check"),
   driver: {
     get: () => ipcRenderer.invoke("driver:get"),
     set: (patch) => ipcRenderer.invoke("driver:set", patch),

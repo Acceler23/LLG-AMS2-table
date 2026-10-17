@@ -328,16 +328,19 @@ ipcMain.handle("app:openPath", (_event, target) => {
 // ---------------------------------------------------------------- atualizacao
 // Ao abrir, procura uma versao nova nos Releases do GitHub (app/updater.js).
 // So no aplicativo gerado (nao no "npm run app"); LLG_NO_UPDATE=1 desliga.
+// Tambem pelo botao "Procurar atualizacao" do painel (aba Configuracao).
+// Devolve o texto que o painel mostra.
 async function checkUpdates() {
-  if (!app.isPackaged || process.env.LLG_NO_UPDATE) return;
+  if (!app.isPackaged || process.env.LLG_NO_UPDATE) return "A atualização automática só funciona no aplicativo gerado (LLG Overlay.exe).";
   let info;
   try {
     info = await updater.checkForUpdate(app.getVersion());
   } catch (err) {
     console.warn("Atualizacao: nao foi possivel consultar o GitHub:", err.message);
-    return;
+    return `Não foi possível consultar o GitHub: ${err.message}`;
   }
-  if (!info || !panelWin) return;
+  if (!info) return `Você já está na versão mais nova (${app.getVersion()}).`;
+  if (!panelWin) return "";
   const notes = info.notes.replace(/\*\*/g, "").split(/\r?\n/).filter((l) => l.trim()).slice(0, 12).join("\n");
   const { response } = await dialog.showMessageBox(panelWin, {
     type: "info",
@@ -349,7 +352,7 @@ async function checkUpdates() {
     cancelId: 1,
     noLink: true,
   });
-  if (response !== 0 || !panelWin) return;
+  if (response !== 0 || !panelWin) return `Versão ${info.version} disponível. Clique de novo quando quiser atualizar.`;
   const baseTitle = panelWin.getTitle();
   try {
     await updater.prepareUpdate(info, (p) => {
@@ -373,10 +376,17 @@ async function checkUpdates() {
       noLink: true,
     });
     if (open === 0) shell.openExternal(`https://github.com/${updater.REPO}/releases/latest`);
-    return;
+    return `Não foi possível atualizar: ${err.message}`;
   }
   app.quit(); // o script do updater espera fechar, copia a versao nova e abre de novo
+  return "Atualizando...";
 }
+
+let checkingUpdates = null; // um aviso por vez
+ipcMain.handle("update:check", () => {
+  if (!checkingUpdates) checkingUpdates = checkUpdates().finally(() => (checkingUpdates = null));
+  return checkingUpdates;
+});
 
 // ---------------------------------------------------------------- inicio
 if (!app.requestSingleInstanceLock()) {
@@ -427,7 +437,11 @@ if (!app.requestSingleInstanceLock()) {
     // abre junto os programas escolhidos no painel, se houver
     launchCompanions(true).catch(() => {});
     // versao nova no GitHub? (depois que o painel aparece, para o aviso ficar por cima dele)
-    panelWin.webContents.once("did-finish-load", () => checkUpdates().catch(() => {}));
+    panelWin.webContents.once("did-finish-load", () => {
+      checkingUpdates = checkUpdates()
+        .catch(() => {})
+        .finally(() => (checkingUpdates = null));
+    });
   });
 
   app.on("before-quit", () => {

@@ -313,6 +313,16 @@
     </div>
 
     <div id="appFiles" hidden>
+      <h3>Versão</h3>
+      <div class="box">
+        <div class="muted">O aplicativo procura uma versão nova sempre que abre. Para procurar agora, use o botão.</div>
+        <div class="row">
+          <span id="appVersion" style="flex:1">Versão —</span>
+          <button id="updateBtn" onclick="checkUpdate()">Procurar atualização</button>
+        </div>
+        <div class="muted" id="updateStatus"></div>
+      </div>
+
       <h3>Abrir junto com o aplicativo</h3>
       <div class="box">
         <div class="muted">Outros programas para abrir sempre que o LLG Overlay abrir, como o OBS. O que já estiver aberto não abre de novo.</div>

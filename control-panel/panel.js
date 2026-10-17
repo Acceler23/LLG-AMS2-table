@@ -784,7 +784,25 @@ async function companionAction(action, file) {
   }
 }
 
+// versao do aplicativo e procura de atualizacao (app/updater.js)
+async function checkUpdate() {
+  if (!window.llgApp || !window.llgApp.checkUpdate) return;
+  const btn = document.getElementById("updateBtn");
+  const status = document.getElementById("updateStatus");
+  btn.disabled = true;
+  status.textContent = "Procurando...";
+  try {
+    status.textContent = (await window.llgApp.checkUpdate()) || "";
+  } catch (e) {
+    status.textContent = "Erro: " + e.message;
+  }
+  btn.disabled = false;
+}
+
 if (window.llgApp) {
+  window.llgApp.info().then((info) => {
+    document.getElementById("appVersion").textContent = `Versão ${info.version}`;
+  });
   document.getElementById("appSection").hidden = false;
   document.getElementById("appFiles").hidden = false;
   if (window.llgApp.companion) window.llgApp.companion.get().then(showCompanion);
