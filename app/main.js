@@ -10,6 +10,7 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, screen, shell } = require("el
 const { spawn, execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const updater = require("./updater");
 
 const ROOT = path.join(__dirname, "..");
 
@@ -324,6 +325,59 @@ ipcMain.handle("app:openPath", (_event, target) => {
   return "";
 });
 
+// ---------------------------------------------------------------- atualizacao
+// Ao abrir, procura uma versao nova nos Releases do GitHub (app/updater.js).
+// So no aplicativo gerado (nao no "npm run app"); LLG_NO_UPDATE=1 desliga.
+async function checkUpdates() {
+  if (!app.isPackaged || process.env.LLG_NO_UPDATE) return;
+  let info;
+  try {
+    info = await updater.checkForUpdate(app.getVersion());
+  } catch (err) {
+    console.warn("Atualizacao: nao foi possivel consultar o GitHub:", err.message);
+    return;
+  }
+  if (!info || !panelWin) return;
+  const notes = info.notes.replace(/\*\*/g, "").split(/\r?\n/).filter((l) => l.trim()).slice(0, 12).join("\n");
+  const { response } = await dialog.showMessageBox(panelWin, {
+    type: "info",
+    title: "LLG Overlay",
+    message: `Nova versão disponível: ${info.version}`,
+    detail: `Você está usando a ${app.getVersion()}.\n\nAo atualizar, o aplicativo fecha, instala a versão nova e abre de novo sozinho. As suas configurações são mantidas.${notes ? "\n\n" + notes : ""}`,
+    buttons: ["Atualizar agora", "Depois"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (response !== 0 || !panelWin) return;
+  const baseTitle = panelWin.getTitle();
+  try {
+    await updater.prepareUpdate(info, (p) => {
+      if (!panelWin) return;
+      panelWin.setProgressBar(p);
+      panelWin.setTitle(`${baseTitle} - baixando a atualização ${Math.round(p * 100)}%`);
+    });
+  } catch (err) {
+    if (panelWin) {
+      panelWin.setProgressBar(-1);
+      panelWin.setTitle(baseTitle);
+    }
+    const { response: open } = await dialog.showMessageBox(panelWin, {
+      type: "error",
+      title: "LLG Overlay",
+      message: "Não foi possível atualizar",
+      detail: `${err.message}\n\nVocê pode baixar a versão nova pela página de Releases.`,
+      buttons: ["Abrir a página", "Fechar"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (open === 0) shell.openExternal(`https://github.com/${updater.REPO}/releases/latest`);
+    return;
+  }
+  app.quit(); // o script do updater espera fechar, copia a versao nova e abre de novo
+}
+
 // ---------------------------------------------------------------- inicio
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -372,6 +426,8 @@ if (!app.requestSingleInstanceLock()) {
     syncDriverWindow();
     // abre junto os programas escolhidos no painel, se houver
     launchCompanions(true).catch(() => {});
+    // versao nova no GitHub? (depois que o painel aparece, para o aviso ficar por cima dele)
+    panelWin.webContents.once("did-finish-load", () => checkUpdates().catch(() => {}));
   });
 
   app.on("before-quit", () => {
