@@ -337,6 +337,15 @@ function showRltStatus(st) {
   const parts = ["Chave salva"];
   if (st.leagueName) parts.push("liga " + st.leagueName);
   parts.push(st.selectedSeasonId ? "temporada aplicada" : "nenhuma temporada aplicada");
+  // cache do RLT (server/rltCache.js): requisicoes de hoje e bloqueio pelo limite da API
+  const c = st.cache;
+  if (c) {
+    parts.push(`${c.requestsToday} requisições à API hoje`);
+    if (c.blocked) {
+      const until = c.blockedUntil ? new Date(c.blockedUntil).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
+      parts.push(`limite da API atingido: usando os dados salvos${until ? " até " + until : ""}`);
+    }
+  }
   el.textContent = parts.join(" · ");
 }
 
@@ -641,6 +650,7 @@ function fillLinks() {
   document.getElementById("linkCard").value = `${base}/overlay/driver-card.html`;
   document.getElementById("linkDriver").value = `${base}/overlay/driver-table.html`;
   document.getElementById("linkTrackStats").value = `${base}/overlay/track-stats.html`;
+  document.getElementById("linkFull").value = `${base}/overlay/full-timing.html`;
 }
 
 // ---------------------------------------------------------------- estatisticas da pista

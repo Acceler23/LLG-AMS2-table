@@ -62,13 +62,31 @@ function createRaceState(clock) {
   let baselineLocked = false;
   const pit = new Map(); // nome -> { stops, wasInPit, stintStartLap, stintLaps, timer }
   const finished = new Map(); // nome -> instante (ms) em que recebeu a bandeirada
+  const bestLaps = new Map(); // nome -> { ms, lap }: em que volta saiu a melhor volta
 
   function reset() {
     startPositions = new Map();
     baselineLocked = false;
     pit.clear();
     finished.clear();
+    bestLaps.clear();
     sessionStartedAt = now();
+  }
+
+  // Numero da volta em que o piloto fez a melhor volta. Os jogos so informam o
+  // tempo; aqui a volta e registrada quando a ultima volta completada e a
+  // melhor (ultima = melhor, e o numero e o de voltas completadas). Se a
+  // overlay abriu depois dessa volta, o numero fica desconhecido (null).
+  function bestLapNumber(entry) {
+    const best = entry.fastestLapMs;
+    if (!(best > 0)) return null;
+    const known = bestLaps.get(entry.name);
+    if (known && known.ms === best) return known.lap;
+    if (entry.lastLapMs === best && entry.lapsCompleted > 0) {
+      bestLaps.set(entry.name, { ms: best, lap: entry.lapsCompleted });
+      return entry.lapsCompleted;
+    }
+    return null;
   }
 
   // Posicao do carro dentro da volta, em metros (null se nao der pra calcular).
@@ -180,6 +198,8 @@ function createRaceState(clock) {
           (!!timer && timer.phase === "done") ||
           (tracking && st.stintLaps === 0 && st.stops > 0 && !st.wasInPit),
       };
+
+      entry.fastestLapNum = bestLapNumber(entry);
 
       if (isRace && entry.raceState === 3 && !finished.has(name)) finished.set(name, t);
       entry.finishedAtMs = finished.has(name) ? finished.get(name) : null;

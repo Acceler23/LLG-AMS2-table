@@ -93,6 +93,15 @@
       .replace(/^_|_$/g, "");
   }
 
+  // Nome do carro para mostrar: sem o sufixo de configuracao aerodinamica que
+  // o jogo poe no nome ("... - Low Downforce", "... - High Downforce",
+  // "... - Speedway").
+  function carDisplayName(carName) {
+    return String(carName || "")
+      .replace(/\s*-\s*(low downforce|high downforce|speedway)\s*$/i, "")
+      .trim();
+  }
+
   function manufacturerName(carName) {
     return (carName || "").split(" ")[0];
   }
@@ -219,6 +228,7 @@
   // pontuacao, sem ano no fim ("interlagos.scb.2011" -> "interlagos scb").
   function trackKey(text) {
     return String(text || "")
+      .replace(/([a-z])([A-Z])/g, "$1 $2") // nomes colados do jogo: "CampoGrande" -> "Campo Grande"
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase()
@@ -233,6 +243,8 @@
   function sameTrack(a, b) {
     if (!a || !b) return false;
     if (a === b) return true;
+    // "campogrande" e "campo grande": iguais sem os espacos
+    if (a.replace(/ /g, "") === b.replace(/ /g, "")) return true;
     return ` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `);
   }
 
@@ -345,6 +357,7 @@
     classColor,
     teamSlug,
     manufacturerName,
+    carDisplayName,
     carLogo,
     carLogoFromTeam,
     teamLogoFile,

@@ -1,12 +1,18 @@
 const BASE = "https://www.racingleaguetools.com";
+// A cada ciclo, UMA requisicao (o feed de mudancas do RLT, server/rltCache.js)
+// diz o que mudou; so isso e buscado de novo. O resto vem do cache.
 const REFRESH_MS = 5 * 60 * 1000;
-// Enquanto ha piloto na pista sem ligacao com o RLT, a temporada e relida bem
-// mais vezes, para pegar logo um nome no jogo cadastrado ou um reserva novo.
-const FAST_REFRESH_MS = 30 * 1000;
+// Enquanto ha piloto na pista sem ligacao com o RLT, o feed e olhado mais
+// vezes, para pegar logo um nome no jogo cadastrado ou um reserva novo. A API
+// do RLT atualiza os dados a cada 2 min (fora atualizacao manual), entao olhar
+// mais vezes que isso nao traz nada novo.
+const FAST_REFRESH_MS = 2 * 60 * 1000;
 
 const { normalizeName } = require("../overlay/shared/names");
 const { normalizeColor } = require("../overlay/shared/colors");
 const secret = require("./secret");
+const path = require("path");
+const { createRltCache } = require("./rltCache");
 
 // A chave vem do painel de controle (pedida na primeira vez que o aplicativo
 // abre e guardada criptografada no settings.json) ou, para quem desenvolve,
@@ -50,13 +56,9 @@ function hasKey() {
   return !!apiKey;
 }
 
-async function rltFetch(path) {
-  if (!apiKey) {
-    const err = new Error("API key ausente");
-    err.status = 401;
-    throw err;
-  }
-  const res = await fetch(`${BASE}${path}`, {
+// Requisicao de verdade a API (so o cache chama).
+async function apiRequest(p) {
+  const res = await fetch(`${BASE}${p}`, {
     headers: { "X-API-Key": apiKey, Accept: "application/json" },
   });
   const text = await res.text();
@@ -66,13 +68,25 @@ async function rltFetch(path) {
   } catch {
     body = { raw: text };
   }
-  if (!res.ok) {
-    const err = new Error((body && (body.message || body.error)) || `HTTP ${res.status}`);
-    err.status = res.status;
-    err.body = body;
+  return { status: res.status, headers: { "retry-after": res.headers.get("retry-after") }, body };
+}
+
+// Cache das respostas, salvo na pasta de dados (a mesma do settings.json)
+const rltCache = createRltCache({
+  file: path.join(process.env.LLG_DATA_DIR || path.join(__dirname, ".."), "rlt-cache.json"),
+  request: apiRequest,
+  log: (msg) => console.warn(msg),
+});
+
+// maxAgeMs (opcional): idade maxima da resposta guardada (ver rltCache.get)
+async function rltFetch(p, maxAgeMs) {
+  if (!apiKey) {
+    const err = new Error("API key ausente");
+    err.status = 401;
     throw err;
   }
-  return body;
+  rltCache.useKey(apiKey); // dados de outra chave (outra liga) nao servem
+  return rltCache.get(p, maxAgeMs);
 }
 
 function unwrap(body) {
@@ -206,29 +220,24 @@ function lineupSeatsToDrivers(lineups) {
 }
 
 // Nome no jogo de cada piloto: o RLT so informa no perfil do piloto
-// (/drivers/{id}), nao no lineup nem na pontuacao. Muda pouco, entao cada
-// perfil e guardado por um tempo e so buscado de novo depois disso.
-const PROFILE_TTL_MS = 10 * 60 * 1000;
-const FAST_PROFILE_TTL_MS = 25 * 1000; // perfis de quem ainda nao ligou, no modo rapido
+// (/drivers/{id}), nao no lineup nem na pontuacao. O perfil fica no cache e e
+// relido quando o feed avisa que o piloto mudou; como rede de seguranca, ele
+// tambem vence sozinho (5 min para quem esta na pista sem ligacao, 6 h os demais).
+const PROFILE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const FAST_PROFILE_MAX_AGE_MS = 5 * 60 * 1000;
 let fastRefresh = false;
 let fastProfileIds = new Set(); // pilotos do lineup ainda sem ligacao
-const driverProfiles = new Map(); // driverId -> { at, inGameName, inGameNames }
 
 async function fetchDriverProfile(driverId) {
-  const have = driverProfiles.get(driverId);
-  const ttl = fastRefresh && fastProfileIds.has(driverId) ? FAST_PROFILE_TTL_MS : PROFILE_TTL_MS;
-  if (have && Date.now() - have.at < ttl) return have;
+  const maxAge = fastRefresh && fastProfileIds.has(driverId) ? FAST_PROFILE_MAX_AGE_MS : PROFILE_MAX_AGE_MS;
   try {
-    const data = unwrap(await rltFetch(`/api/public/v1/drivers/${driverId}`));
-    const info = {
-      at: Date.now(),
+    const data = unwrap(await rltFetch(`/api/public/v1/drivers/${driverId}`, maxAge));
+    return {
       inGameName: (data && (data.inGameName || data.InGameName)) || null,
       inGameNames: (data && (data.inGameNames || data.InGameNames)) || null,
     };
-    driverProfiles.set(driverId, info);
-    return info;
   } catch (_) {
-    return have || null; // sem resposta agora: fica com o que ja tinha
+    return null; // sem resposta e sem nada guardado
   }
 }
 
@@ -371,6 +380,7 @@ function collectClassStandingsMap(standingsData) {
         points: d.points != null ? d.points : d.Points,
         positionChange: d.positionChange != null ? d.positionChange : d.PositionChange,
         classInfo: d.classInfo || d.ClassInfo || classInfo,
+        raw: d, // etapas, descarte e punicoes da classe (o RLT pontua cada classe a parte)
       });
     });
   });
@@ -636,9 +646,14 @@ function buildStandingsRows(standingsData, classes) {
       pointsRaw: ptsOverall.raw,
       classPoints: ptsClass.text,
       classPointsRaw: ptsClass.raw,
-      // pontos por etapa e regra de descarte (projecao em overlay/shared/points.js)
-      rounds: discard ? driverRounds(d) : null,
+      // pontos por etapa (tela de pontuacao da tabela completa) e regra de
+      // descarte (projecao em overlay/shared/points.js)
+      rounds: driverRounds(d),
       discard,
+      penaltyPoints: Number(d.penalties && d.penalties.totalPenaltyPoints) || 0,
+      // o mesmo dentro da classe (com classes, o RLT tem etapas e descarte proprios por classe)
+      classRounds: classRow && classRow.raw ? driverRounds(classRow.raw) : null,
+      classPenaltyPoints: classRow && classRow.raw ? Number(classRow.raw.penalties && classRow.raw.penalties.totalPenaltyPoints) || 0 : null,
       gapToLeader: d.gapToLeader || null,
       gapToAhead: d.gapToAhead || null,
       positionChange: d.positionChange != null ? d.positionChange : null,
@@ -704,6 +719,10 @@ async function selectSeason(seasonId) {
 async function refresh() {
   if (!hasKey()) return null;
   try {
+    // a unica requisicao do ciclo: o que mudou no RLT desde a ultima vez.
+    // O resto abaixo vem do cache (so o que mudou e buscado de novo).
+    rltCache.useKey(apiKey);
+    await rltCache.checkChanges();
     await fetchLeague();
     await fetchSeasons();
     if (selectedSeasonId) {
@@ -801,7 +820,26 @@ async function fetchMultiseasonStatistics(key) {
   return unwrap(await rltFetch(`${base}?includeTrackStats=true`));
 }
 
+// Estado do cache (painel) e leitura pelo cache (/api/rlt/raw, para scripts de teste)
+function cacheStatus() {
+  return rltCache.status();
+}
+
+function rawGet(p) {
+  return rltFetch(p);
+}
+
+// Olha o feed de mudancas agora (ao abrir o aplicativo: o que mudou enquanto ele estava fechado).
+async function syncChanges() {
+  if (!hasKey()) return 0;
+  rltCache.useKey(apiKey);
+  return rltCache.checkChanges();
+}
+
 module.exports = {
+  cacheStatus,
+  rawGet,
+  syncChanges,
   fetchMultiseasons,
   fetchMultiseasonStatistics,
   setFastRefresh,

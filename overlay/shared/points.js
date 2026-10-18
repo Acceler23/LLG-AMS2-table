@@ -54,7 +54,8 @@
     const base = Number(raw) || 0;
     const extra = Number(add) || 0;
     const rule = row && row.discard;
-    const rounds = row && Array.isArray(row.rounds) ? row.rounds : null;
+    // com classes, as etapas da classe (o RLT pontua cada classe a parte)
+    const rounds = row && classMode && Array.isArray(row.classRounds) ? row.classRounds : row && Array.isArray(row.rounds) ? row.rounds : null;
     if (!rule || !(rule.count > 0) || !rounds) return base + extra;
 
     const keep = (values) => {

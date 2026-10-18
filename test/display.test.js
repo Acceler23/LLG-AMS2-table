@@ -133,3 +133,24 @@ test("nome da pista: chave com * vale para qualquer nome que contenha o trecho",
     setConfig(null);
   }
 });
+
+test("nome do carro sem o sufixo de downforce/speedway", () => {
+  assert.equal(display.carDisplayName("Formula Ultimate Gen2 - Low Downforce"), "Formula Ultimate Gen2");
+  assert.equal(display.carDisplayName("Stock Car Pro 2023 - High Downforce"), "Stock Car Pro 2023");
+  assert.equal(display.carDisplayName("Formula Vintage - speedway"), "Formula Vintage");
+  assert.equal(display.carDisplayName("Porsche 911 GT3 R"), "Porsche 911 GT3 R");
+  assert.equal(display.carDisplayName(null), "");
+});
+
+test("etapa do RLT: nome colado do jogo bate com o nome com espaco", () => {
+  const events = [
+    { round: 3, trackName: "Jacarepagua", uniqueName: "jacarepagua.1996", country: "Brazil" },
+    { round: 4, trackName: "Campo Grande", uniqueName: "campo.grande.2009", country: "Brazil" },
+  ];
+  // o AMS2 manda "CampoGrande" como pista e como tracado
+  const hit = display.matchEvent(events, ["CampoGrande", "CampoGrande CampoGrande"], Date.parse("2026-10-17"));
+  assert.equal(hit && hit.round, 4);
+  // tudo em minusculas e colado tambem
+  assert.equal(display.matchEvent(events, ["campogrande"], 0).round, 4);
+  assert.equal(display.matchEvent(events, ["Interlagos"], 0), null);
+});

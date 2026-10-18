@@ -24,6 +24,7 @@ const { installAcApp, findSteamLibraries } = require("./acInstaller");
 const carsets = require("./carsets");
 const secret = require("./secret");
 const { compactTracks, compactMultiseasons } = require("./trackStats");
+const { createSessionLog } = require("./sessionLog");
 
 // Chave do RLT: a do .env tem prioridade; senao, a ultima salva pelo painel.
 // (ler sempre: uma chave antiga, salva em texto puro, e regravada criptografada)
@@ -320,6 +321,28 @@ app.post("/api/links", (req, res) => {
   res.json({ ok: true, ...linkStatus, manual: rlt.getManualLinks() });
 });
 
+// ---- log da corrida (tabela completa): ultrapassagens, melhores voltas, box, punicoes ----
+// A classe de cada carro e a do RLT quando ha temporada com classes (igual as
+// overlays); sem temporada, a do jogo.
+let classMatcher = null;
+let classMatcherFor = null;
+function sessionLogClassOf(entry) {
+  const cfg = rlt.getOverlayPayload();
+  if (!cfg || !cfg.classes || !cfg.classes.length) return entry.carClass || "—";
+  if (classMatcherFor !== cfg) {
+    classMatcherFor = cfg;
+    classMatcher = LLGNames.createMatcher(LLGNames.buildPool(cfg), {
+      explicitMap: Object.assign({}, ingameMapFromConfig(), cfg.manualLinks || {}),
+    });
+  }
+  const info = classMatcher.lookup(String(entry.name || "").replace(/​+$/, ""));
+  return info ? info.uniqueName || info.name || "—" : "—";
+}
+const sessionLog = createSessionLog({ classOf: sessionLogClassOf });
+function sessionLogPayload() {
+  return { type: "sessionLog", data: { events: sessionLog.getEvents() } };
+}
+
 function broadcastRlt() {
   const payload = rlt.getOverlayPayload();
   wss.broadcast({ type: "rltConfig", data: payload });
@@ -368,6 +391,7 @@ wss.onConnect((socket) => {
   if (socket.readyState === 1) {
     socket.send(JSON.stringify({ type: "assetsConfig", data: assetsConfigPayload() }));
   }
+  if (socket.readyState === 1) socket.send(JSON.stringify(sessionLogPayload()));
   if (socket.readyState === 1 && trackStats.tracks.length) {
     socket.send(JSON.stringify({ type: "trackStats", data: trackStatsPayload() }));
   }
@@ -531,7 +555,21 @@ app.post("/api/assets/base", (req, res) => {
 });
 
 app.get("/api/rlt/status", (req, res) => {
-  res.json({ ok: true, ...rlt.getStatus() });
+  res.json({ ok: true, ...rlt.getStatus(), cache: rlt.cacheStatus() });
+});
+
+// Leitura da API do RLT PELO CACHE (server/rltCache.js), so deste computador:
+// scripts de teste usam isto em vez de chamar a API, para nao gastar o limite.
+//   /api/rlt/raw?path=/api/public/v1/seasons/38
+app.get("/api/rlt/raw", async (req, res) => {
+  if (!isLocalRequest(req)) return res.status(403).json({ ok: false, error: "So neste computador" });
+  const p = String(req.query.path || "");
+  if (!p.startsWith("/api/public/v1/")) return res.status(400).json({ ok: false, error: "path deve comecar com /api/public/v1/" });
+  try {
+    res.json(await rlt.rawGet(p));
+  } catch (e) {
+    res.status(e.status || 500).json({ ok: false, error: e.message });
+  }
 });
 
 app.get("/api/rlt/drivers", (req, res) => {
@@ -696,6 +734,7 @@ function handleGamePayload(payload) {
   if (payload.game === "lmu") lmuFocus.apply(payload);
   const data = raceState.apply(payload);
   noteSessionNames(data && data.standings);
+  if (data && sessionLog.apply(data)) wss.broadcast(sessionLogPayload());
   // ACC: limite de stint escolhido no painel (0 = sem limite)
   if (data && data.game === "acc" && data.session) data.session.stintLimitMin = accStintLimitMin;
   wss.broadcast({ type: "standings", data });
@@ -784,6 +823,7 @@ server.listen(HTTP_PORT, async () => {
   console.log(`Driver card overlay em   http://localhost:${HTTP_PORT}/overlay/driver-card.html`);
   console.log(`Tabela do piloto em      http://localhost:${HTTP_PORT}/overlay/driver-table.html`);
   console.log(`Estatisticas da pista em http://localhost:${HTTP_PORT}/overlay/track-stats.html`);
+  console.log(`Tabela completa em      http://localhost:${HTTP_PORT}/overlay/full-timing.html`);
   console.log(`Painel de controle em    http://localhost:${HTTP_PORT}/panel/panel.html`);
   console.log(`Aguardando os jogos: AMS2 (listener.ps1), LMU (listener-lmu.ps1) e ACC (API de transmissao)`);
   console.log(ALLOW_LAN ? "Acesso liberado para a rede local (ALLOW_LAN)." : "Acesso restrito a este computador.");
@@ -791,6 +831,8 @@ server.listen(HTTP_PORT, async () => {
   if (!rlt.hasKey()) console.log("RLT sem chave: salve pelo painel ou defina RLT_API_KEY no arquivo .env.");
   if (rlt.hasKey()) {
     try {
+      // o que mudou no RLT enquanto o aplicativo estava fechado (o resto vem do cache)
+      await rlt.syncChanges();
       await rlt.fetchLeague();
       await rlt.fetchSeasons();
       // reaplica a temporada que estava em uso antes de fechar

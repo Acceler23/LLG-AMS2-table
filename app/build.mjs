@@ -23,6 +23,7 @@ const ignore = [
   /^\/\.claude($|\/)/,
   /^\/\.env$/,
   /^\/settings\.json$/,
+  /^\/rlt-cache\.json(\.tmp)?$/,
   /^\/server\/rlt-key\.enc$/,
   /^\/drivers-config_bak\.js$/,
   // headers dos jogos: so referencia para desenvolvimento, e os do LMU nao podem ser redistribuidos

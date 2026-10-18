@@ -99,3 +99,19 @@ test("etapa em andamento: a da pista, senao a proxima nao concluida", () => {
   assert.equal(P.currentRound(events, null, Date.parse("2026-10-14T20:00:00Z")), 5);
   assert.equal(P.currentRound([], null), null);
 });
+
+test("projecao por classe usa as etapas da classe", () => {
+  const P = require("../overlay/shared/points");
+  // geral: 34/41/47/55 + 0 descartado; classe: 83/90/90/90 + 55 descartado (353 pontos)
+  const row = {
+    pointsRaw: 177,
+    classPointsRaw: 353,
+    discard: { type: "Events", count: 1 },
+    rounds: [{ round: 1, points: 34 }, { round: 2, points: 41 }, { round: 3, points: 47 }, { round: 4, points: 55 }, { round: 5, points: 0, discarded: true }],
+    classRounds: [{ round: 1, points: 83 }, { round: 2, points: 90 }, { round: 3, points: 90 }, { round: 4, points: 90 }, { round: 5, points: 55, discarded: true }],
+  };
+  // etapa 6 com 90 pontos na classe: 83 + 90 + 90 + 90 + 55 + 90, sai o pior (55) = 443
+  assert.equal(P.projectedTotal(row, 90, 6, true), 443);
+  // no geral (sem classe) continua com as etapas do geral: 34 + 41 + 47 + 55 + 0 + 90, sai o 0 = 267
+  assert.equal(P.projectedTotal(row, 90, 6, false), 267);
+});

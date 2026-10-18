@@ -1,0 +1,527 @@
+/* Tabela completa da corrida: todos os carros, com as colunas lado a lado.
+   Mesmas cores da tabela de tempos (timing-table.css).
+   Desenhada para 1920 px de largura (tabela 1440 + log da corrida 480);
+   full-timing.js aplica zoom para acompanhar a largura da janela/fonte. */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: transparent;
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: #fff;
+  overflow: hidden;
+}
+
+#full-timing {
+  width: 1920px;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+
+#full-timing.hidden { display: none; }
+/* safety car: a tabela e o log ficam amarelos */
+#full-timing.sc-out .ft-table,
+#full-timing.sc-out .ft-log { background-color: rgb(230, 184, 0); }
+
+/* ---- cabecalho: liga | pista | sessao ---- */
+.ft-title {
+  display: flex;
+  align-items: stretch;
+  height: 62px;
+  background-color: #0a2d52;
+  text-transform: uppercase;
+}
+
+.ft-brand {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  padding: 0 18px;
+  background-color: var(--header-color, #0b5ed7);
+  line-height: 1.1;
+}
+
+.ft-brand-name {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ft-brand-sub {
+  margin-top: 3px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ft-brand-sub:empty { display: none; }
+
+.ft-track {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+/* as bandeiras tem uma margem em cima e embaixo: a imagem e maior que a faixa visivel */
+.ft-flag {
+  height: 34px;
+  margin: -5px 0;
+}
+
+.ft-session {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px;
+  background-color: var(--header-color, #0b5ed7);
+  border-left: 2px solid rgba(255, 255, 255, 0.35);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.ft-timer { font-weight: 700; }
+
+/* o log tem a altura da tabela (as linhas dos carros); o que nao cabe fica escondido */
+.ft-body {
+  display: flex;
+  align-items: stretch;
+}
+
+.ft-table {
+  flex: 0 0 1440px;
+  min-width: 0;
+  background-color: rgb(14, 58, 102);
+}
+
+/* ---- colunas (titulos e linhas usam o mesmo grid) ---- */
+.ft-head,
+.ft-row {
+  display: grid;
+  grid-template-columns: 60px 60px minmax(0, 1fr) 54px minmax(0, 220px) 130px 130px 130px 190px 86px 96px;
+  align-items: stretch;
+}
+
+#full-timing.single-class .ft-head,
+#full-timing.single-class .ft-row {
+  grid-template-columns: 60px minmax(0, 1fr) 54px minmax(0, 220px) 130px 130px 130px 190px 86px 96px;
+}
+
+#full-timing.single-class .c-cls { display: none; }
+
+.ft-head {
+  height: 32px;
+  background-color: #0a2d52;
+  border-top: 1px solid rgba(0, 197, 253, 0.35);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  opacity: 0.9;
+}
+
+.ft-head > div {
+  display: flex;
+  align-items: center;
+}
+
+#ftRows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px 0;
+}
+
+.ft-row {
+  height: 40px;
+  font-size: 19px;
+  background-color: rgb(14, 66, 165);
+  border-top: 2px solid #3a5a8c;
+}
+
+.ft-row > div {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.ft-row.dnf { opacity: 0.55; }
+
+/* piloto assistido: linha mais clara e a posicao em ciano */
+.ft-row.player {
+  background-color: rgb(0, 107, 221);
+}
+
+.ft-row.player .c-pos {
+  background-color: #00c5fd;
+  color: #0a2d52;
+}
+
+.ft-row.player .c-name { font-weight: 800; }
+
+/* em disputa (mesma regra da pagina de disputas): um leve brilho ambar no comeco da linha */
+.ft-row.battle {
+  background-image: linear-gradient(90deg, rgba(255, 190, 0, 0.28), rgba(255, 190, 0, 0.08) 35%, rgba(255, 190, 0, 0) 70%);
+}
+
+.ft-row.battle .c-name { box-shadow: inset 3px 0 0 #ffbe00; }
+
+.c-pos,
+.c-cls {
+  justify-content: center;
+  font-weight: 800;
+}
+
+.ft-head .c-pos,
+.ft-head .c-cls { justify-content: center; }
+
+.ft-row .c-pos { background-color: #0a2d52; }
+
+/* posicao na classe, na cor da classe */
+.ft-row .c-cls { font-size: 17px; }
+
+.c-name,
+.c-team {
+  padding: 0 12px;
+}
+
+.ft-row .c-name { font-weight: 600; }
+
+.ft-row .c-team {
+  font-size: 16px;
+  opacity: 0.85;
+}
+
+.c-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-logo { justify-content: center; }
+
+.c-logo img {
+  max-width: 44px;
+  max-height: 30px;
+  object-fit: contain;
+}
+
+.c-num,
+.c-best,
+.c-stint {
+  justify-content: flex-end;
+  padding-right: 14px;
+  white-space: nowrap;
+}
+
+.ft-head .c-num,
+.ft-head .c-best,
+.ft-head .c-stint { justify-content: flex-end; }
+
+.ft-row .c-num,
+.ft-row .c-best,
+.ft-row .c-stint { font-weight: 600; }
+
+/* numero da volta da melhor volta */
+.lap-num {
+  margin-left: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+/* melhor volta da corrida (roxo) e melhor volta do piloto (verde), como no WEC */
+.t-purple { color: #d77bff; }
+.t-green { color: #4dff88; }
+
+.t-box {
+  padding: 1px 8px;
+  border-radius: 3px;
+  background-color: #ffcc00;
+  color: #000;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.t-dnf { color: #ff6b6b; font-weight: 800; }
+
+.ft-page {
+  padding: 2px 14px 6px;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+  opacity: 0.75;
+}
+
+.ft-page:empty { display: none; }
+
+/* ---- log da corrida, a direita da tabela ---- */
+.ft-log {
+  position: relative;
+  flex: 0 0 480px;
+  background-color: rgb(14, 58, 102);
+  display: flex;
+  flex-direction: column;
+  border-left: 3px solid #0a2d52;
+  min-width: 0;
+}
+
+.ft-log-head {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  background-color: #0a2d52;
+  border-top: 1px solid rgba(0, 197, 253, 0.35);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+}
+
+/* fora do fluxo, para a altura do log nao aumentar a da tabela; os mais novos em cima */
+#ftLog {
+  position: absolute;
+  top: 32px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px 0;
+}
+
+.lg-item {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  background-color: rgb(14, 66, 165);
+  border-top: 2px solid #3a5a8c;
+  border-left: 5px solid var(--lg-color, #3a5a8c);
+}
+
+.lg-meta {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 4px 0;
+  background-color: #0a2d52;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.lg-meta .lg-time {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.lg-body {
+  min-width: 0;
+  padding: 4px 10px 5px;
+}
+
+.lg-type {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--lg-color, #7ec8ff);
+}
+
+.lg-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 17px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.lg-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lg-right {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.lg-detail {
+  font-size: 14px;
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lg-up { color: #4dff88; }
+.lg-down { color: #ff6b6b; }
+
+.lg-overtake { --lg-color: #4dff88; }
+.lg-fastest.overall { --lg-color: #d77bff; }
+/* classe: etiqueta na cor da classe (a cor pode ser escura demais para texto) */
+.lg-type.chip {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 3px;
+  background-color: var(--lg-color);
+}
+.lg-fastest.personal { --lg-color: #4dff88; }
+.lg-pit { --lg-color: #ffcc00; }
+.lg-yellow { --lg-color: #ffd400; }
+.lg-green { --lg-color: #4dff88; }
+.lg-penalty { --lg-color: #ff6b6b; }
+
+/* ---- posicoes ganhas/perdidas: geral em destaque, na classe pequeno e discreto ---- */
+.c-gain {
+  justify-content: flex-end;
+  gap: 6px;
+  padding-right: 12px;
+  white-space: nowrap;
+}
+
+.ft-head .c-gain { justify-content: flex-end; }
+
+.g-all {
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.g-all.up { color: #4dff88; }
+.g-all.down { color: #ff6b6b; }
+.g-all.same { color: rgba(255, 255, 255, 0.6); }
+
+/* metade do tamanho, sem cor */
+.g-cls {
+  font-size: 10px;
+  font-weight: 600;
+  opacity: 0.6;
+}
+
+#full-timing.single-class .g-cls { display: none; }
+
+/* ---- pontuacao do campeonato (tecla 0) ---- */
+/* no lugar da tabela (1440 px); o log da corrida continua a direita */
+.ft-standings {
+  flex: 0 0 1440px;
+  min-width: 0;
+  background-color: rgb(14, 58, 102);
+  padding-bottom: 3px;
+}
+
+.ft-standings[hidden],
+.ft-table[hidden] { display: none; }
+
+.st-row .c-logo { justify-content: center; }
+
+.st-row .c-logo img {
+  max-width: 42px;
+  max-height: 28px;
+  object-fit: contain;
+}
+
+.st-head,
+.st-row {
+  display: grid;
+  align-items: stretch;
+}
+
+.st-head {
+  height: 32px;
+  background-color: #0a2d52;
+  border-top: 1px solid rgba(0, 197, 253, 0.35);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+}
+
+.st-row {
+  height: 36px;
+  margin-top: 3px;
+  font-size: 18px;
+  background-color: rgb(14, 66, 165);
+  border-top: 2px solid #3a5a8c;
+}
+
+.st-head > div,
+.st-row > div {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.st-head .c-pos,
+.st-row .c-pos {
+  justify-content: center;
+  font-weight: 800;
+}
+
+.st-row .c-pos { background-color: #0a2d52; }
+.st-row .c-name { font-weight: 600; }
+
+.st-row .c-team {
+  font-size: 15px;
+  opacity: 0.85;
+}
+
+.c-pts,
+.c-rnd {
+  justify-content: flex-end;
+  padding-right: 12px;
+  white-space: nowrap;
+}
+
+.c-rnd {
+  justify-content: center;
+  padding-right: 0;
+}
+
+.st-row .c-rnd {
+  font-size: 15px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.st-row .c-pts.main { font-weight: 800; }
+
+/* etapa descartada (e o total descartado) em vermelho */
+.st-row .discarded {
+  color: #ff6b6b;
+  font-weight: 700;
+}
+
+.st-row .c-rnd.discarded { background-color: rgba(255, 60, 60, 0.18); }
+
+/* nome da classe, na cor dela */
+.st-class {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  margin-top: 6px;
+  padding: 0 14px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}

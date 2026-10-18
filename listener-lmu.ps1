@@ -40,6 +40,7 @@ $SC_MAX_LAPS          = 84        # long (2147483647 = corrida por tempo)
 $SC_LAP_DIST          = 88        # double, comprimento da pista em metros
 $SC_NUM_VEHICLES      = 104       # long
 $SC_GAME_PHASE        = 108       # uchar: 3=volta de formacao 5=verde 6=bandeira amarela geral/safety car 8=fim
+$SC_SECTOR_FLAGS      = 110       # schar[3] lido sem sinal (255 = -1, invalido): bandeira amarela local por setor; a ordem dos setores nao e documentada
 $SC_TIME_REMAINING    = 340       # float, segundos
 
 $VEH                  = 2192      # VehicleScoringInfoV01[104]
@@ -59,6 +60,7 @@ $V_LAST_LAP           = 168       # double
 $V_CUR_SECTOR1        = 176       # double
 $V_CUR_SECTOR2        = 184       # double (setor 1 + setor 2)
 $V_NUM_PITSTOPS       = 192       # short
+$V_NUM_PENALTIES      = 194       # short, punicoes pendentes
 $V_IS_PLAYER          = 196       # bool
 $V_IN_PITS            = 198       # bool
 $V_PLACE              = 199       # uchar, posicao (1 = primeiro)
@@ -304,7 +306,7 @@ while ($true) {
                     $carName = $vehicleName
                     $tyreFront = $null; $tyreRear = $null; $tyreWear = $null; $tyres = $null
                     $throttle = $null; $brake = $null; $gear = $null
-                    $virtualEnergy = $null; $lapInvalid = ($buf[$v + $V_COUNT_LAP_FLAG] -ne 2)
+                    $virtualEnergy = $null; $fuelL = $null; $lapInvalid = ($buf[$v + $V_COUNT_LAP_FLAG] -ne 2)
                     if ($telemBySlot.ContainsKey($slot)) {
                         $t = $telemBySlot[$slot]
                         $model = Read-CString $buf ($t + $T_VEHICLE_MODEL) 30
@@ -328,6 +330,7 @@ while ($true) {
                         # carros sem energia virtual (ex: LMP2) vem com 0 e tem combustivel
                         $ve = [BitConverter]::ToSingle($buf, $t + $T_VIRTUAL_ENERGY)
                         $fuel = [BitConverter]::ToDouble($buf, $t + $T_FUEL)
+                        $fuelL = [math]::Round($fuel, 1)
                         if ($ve -gt 0 -or $fuel -le 0.5) { $virtualEnergy = [math]::Round([math]::Max(0.0, [math]::Min(1.0, [double]$ve)), 3) }
                     }
 
@@ -361,6 +364,8 @@ while ($true) {
                         causedYellow  = $false
                         lapInvalidated = $lapInvalid
                         pitStops      = [int][BitConverter]::ToInt16($buf, $v + $V_NUM_PITSTOPS)
+                        penalties     = [int][BitConverter]::ToInt16($buf, $v + $V_NUM_PENALTIES)
+                        fuelL         = $fuelL
                         tyreFront     = $tyreFront
                         tyreRear      = $tyreRear
                         tyres         = $tyres
@@ -380,6 +385,7 @@ while ($true) {
                         timeRemainingSec = [int]$timeRemaining
                         lapsInEvent      = if ($maxLaps -gt 0 -and $maxLaps -lt 100000) { $maxLaps } else { 0 }
                         scOut            = ($gamePhase -eq 6)
+                        sectorFlags      = @([int]$buf[$SCORING + $SC_SECTOR_FLAGS], [int]$buf[$SCORING + $SC_SECTOR_FLAGS + 1], [int]$buf[$SCORING + $SC_SECTOR_FLAGS + 2])
                         trackLocation    = $trackName
                         trackVariation   = ""
                         trackLength      = [math]::Round($trackLength, 1)

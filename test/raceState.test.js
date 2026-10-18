@@ -229,3 +229,21 @@ test("tempo de stint so existe em corrida", () => {
   clock.t += 10 * 60000;
   assert.equal(byName(rs.apply(payload(3, [{ name: "A", position: 1, speedMs: 50 }])), "A").pit.stintMs, 0);
 });
+
+test("numero da volta mais rapida: registrado quando a ultima volta e a melhor", () => {
+  const clock = { t: 0 };
+  const rs = createRaceState(() => clock.t);
+  const p = (laps, last, best) => ({
+    session: { state: 5, trackLocation: "X", trackLength: 3000 },
+    standings: [{ name: "A", position: 1, pitMode: 0, raceState: 2, speedMs: 50, lapsCompleted: laps, currentLap: laps + 1, lastLapMs: last, fastestLapMs: best }],
+  });
+  // overlay aberta depois da melhor volta: numero desconhecido
+  assert.equal(rs.apply(p(5, 91000, 90000)).standings[0].fastestLapNum, null);
+  // volta 6 vira a melhor
+  assert.equal(rs.apply(p(6, 89500, 89500)).standings[0].fastestLapNum, 6);
+  // voltas seguintes mais lentas: continua a 6
+  assert.equal(rs.apply(p(7, 90500, 89500)).standings[0].fastestLapNum, 6);
+  assert.equal(rs.apply(p(8, 91000, 89500)).standings[0].fastestLapNum, 6);
+  // sem melhor volta ainda
+  assert.equal(rs.apply(p(0, 0, 0)).standings[0].fastestLapNum, null);
+});
