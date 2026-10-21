@@ -113,7 +113,7 @@ test("punicoes (LMU) e desclassificacao", () => {
   assert.equal(types("disqualified").length, 1);
 });
 
-test("fora de corrida nao registra nada, e a sessao nova zera o log", () => {
+test("sessao nova zera o log", () => {
   const { clock, log, run } = setup();
   run(3, [{ name: "A", position: 1 }, { name: "B", position: 2 }]);
   run(3, [{ name: "B", position: 1 }, { name: "A", position: 2 }]);
@@ -183,4 +183,64 @@ test("bandeiras: carro lento na amarela (AMS2), amarela local (LMU) e safety car
   frame({ scOut: true }, cars(false));
   frame({ scOut: false }, cars(false));
   assert.deepEqual(types().slice(-2), ["safetyCar", "green"]);
+});
+
+test("classificacao: melhores voltas e box entram; ultrapassagem nao", () => {
+  const clock = { t: 0 };
+  const log = createSessionLog({ clock: () => clock.t, classOf: (e) => e.carClass });
+  const run = (seconds, cars) => {
+    for (let k = 0; k < seconds * 2; k++) {
+      clock.t += 500;
+      log.apply({
+        session: { state: 3, trackLocation: "X", timeRemainingSec: 900 },
+        standings: cars.map((c) => Object.assign({ speedMs: 50, pitMode: 0, raceState: 1, currentLap: 3, carClass: "GT3", pit: { phase: null } }, c)),
+      });
+    }
+  };
+  run(2, [{ name: "A", position: 1, fastestLapMs: 90000 }, { name: "B", position: 2, fastestLapMs: 91000 }]);
+  // B faz a melhor volta e passa para P1 pelo tempo: nao e ultrapassagem
+  run(3, [{ name: "B", position: 1, fastestLapMs: 89000 }, { name: "A", position: 2, fastestLapMs: 90000 }]);
+  run(1, [{ name: "B", position: 1, fastestLapMs: 89000 }, { name: "A", position: 2, fastestLapMs: 90000, pitMode: 2, pit: { phase: "in" } }]);
+  const types = log.getEvents().map((e) => e.type);
+  assert.deepEqual(types, ["fastest", "pitIn"]);
+  assert.equal(log.getEvents()[0].scope, "overall");
+  assert.equal(log.getEvents()[0].race, false);
+  assert.equal(log.getEvents()[0].remainingSec, 900);
+});
+
+test("punicao do AMS2 com o tipo: drive-through recebido e cumprido", () => {
+  const clock = { t: 0 };
+  const log = createSessionLog({ clock: () => clock.t });
+  const frame = (kind) => {
+    clock.t += 500;
+    log.apply({ session: { state: 5, trackLocation: "X" }, standings: [{ name: "A", position: 1, speedMs: 50, pitMode: 0, raceState: 2, currentLap: 4, pit: { phase: null }, penaltyType: kind }] });
+  };
+  frame(null);
+  frame("driveThrough");
+  frame("driveThrough");
+  frame(null);
+  frame("stopGo");
+  const ev = log.getEvents().map((e) => `${e.type}:${e.kind}`);
+  assert.deepEqual(ev, ["penalty:driveThrough", "penaltyServed:driveThrough", "penalty:stopGo"]);
+});
+
+test("corrida: sem aviso de melhor volta nas voltas 1 e 2", () => {
+  const clock = { t: 0 };
+  const log = createSessionLog({ clock: () => clock.t });
+  const frame = (laps, a, b) => {
+    clock.t += 500;
+    log.apply({
+      session: { state: 5, trackLocation: "X" },
+      standings: [
+        { name: "A", position: 1, speedMs: 50, pitMode: 0, raceState: 2, lapsCompleted: laps, currentLap: laps + 1, fastestLapMs: a, pit: { phase: null } },
+        { name: "B", position: 2, speedMs: 50, pitMode: 0, raceState: 2, lapsCompleted: laps, currentLap: laps + 1, fastestLapMs: b, pit: { phase: null } },
+      ],
+    });
+  };
+  frame(0, 0, 0);
+  frame(1, 92000, 93000); // volta 1
+  frame(2, 91000, 90500); // volta 2: B mais rapido de todos, mas ainda nao avisa
+  frame(3, 90800, 90500); // volta 3: A melhora, mas nao bate o 90500 de B: pessoal
+  frame(4, 90000, 90500); // volta 4: A faz a melhor da corrida
+  assert.deepEqual(log.getEvents().map((e) => `${e.driver} ${e.scope} ${e.lap}`), ["A personal 3", "A overall 4"]);
 });

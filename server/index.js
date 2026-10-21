@@ -18,6 +18,7 @@ const { createRaceState } = require("./raceState");
 const rlt = require("./rltClient");
 const settings = require("./settings");
 const lmuFocus = require("./lmuFocus");
+const lmuIdentity = require("./lmuIdentity");
 const { startAccClient } = require("./accClient");
 const { startAcClient } = require("./acClient");
 const { installAcApp, findSteamLibraries } = require("./acInstaller");
@@ -43,6 +44,28 @@ function isLocalRequest(req) {
   if (ALLOW_LAN) return true;
   const addr = (req.socket && req.socket.remoteAddress) || "";
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
+// Overlays na rede local (opcao do painel, aba Configuracao): outros aparelhos
+// da mesma rede (celular, tablet, outro PC) podem abrir as paginas de /overlay
+// e receber os dados ao vivo. O painel, as rotas /api e /command e os comandos
+// continuam so neste computador.
+let lanOverlays = !!settings.get("lanOverlays");
+function isLanOverlayRequest(req) {
+  return lanOverlays && (req.method === "GET" || req.method === "HEAD") && (req.path === "/overlay" || req.path.startsWith("/overlay/"));
+}
+
+// Enderecos deste computador na rede local (para os links do painel)
+function lanAddresses() {
+  const out = [];
+  Object.values(require("os").networkInterfaces()).forEach((list) => {
+    (list || []).forEach((a) => {
+      if (a && (a.family === "IPv4" || a.family === 4) && !a.internal) out.push(a.address);
+    });
+  });
+  // redes de casa primeiro (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+  const priv = (ip) => /^192\.168\.|^10\.|^172\.(1[6-9]|2\d|3[01])\./.test(ip);
+  return out.sort((a, b) => priv(b) - priv(a));
 }
 const DEFAULT_ASSETS = path.join(__dirname, "..", "overlay", "assets");
 let assetsPath = process.env.ASSETS_PATH
@@ -90,8 +113,12 @@ function broadcastAssetsConfig() {
 
 const app = express();
 app.use((req, res, next) => {
-  if (isLocalRequest(req)) return next();
-  res.status(403).send("Acesso permitido apenas neste computador (defina ALLOW_LAN=1 para liberar a rede local).");
+  if (isLocalRequest(req) || isLanOverlayRequest(req)) return next();
+  res.status(403).send(
+    lanOverlays
+      ? "Daqui da rede so as overlays (/overlay/...) podem ser abertas. O painel funciona apenas no computador do aplicativo."
+      : "Acesso permitido apenas neste computador. Para abrir as overlays em outro aparelho, ligue \"Overlays na rede local\" no painel (aba Configuracao)."
+  );
 });
 app.use(express.json());
 app.use("/overlay/assets", (req, res, next) => {
@@ -102,7 +129,35 @@ app.use("/panel", express.static(path.join(__dirname, "..", "control-panel")));
 
 const server = http.createServer(app);
 
-const wss = createWsServer(server, { verifyClient: (info) => isLocalRequest(info.req) });
+const wss = createWsServer(server, {
+  // este computador sempre; outros aparelhos da rede so com a opcao ligada (e so recebem dados)
+  verifyClient: (info) => isLocalRequest(info.req) || lanOverlays,
+  canCommand: (req) => isLocalRequest(req),
+});
+
+app.get("/api/lan", (req, res) => {
+  res.json({ ok: true, enabled: lanOverlays, port: Number(HTTP_PORT), addresses: lanAddresses() });
+});
+
+// QR code (SVG) do mini painel da rede local (overlay/menu.html), para abrir
+// no celular apontando a camera. ?ip= escolhe outro endereco deste PC.
+app.get("/api/lan/qr.svg", (req, res) => {
+  const addresses = lanAddresses();
+  const ip = addresses.includes(String(req.query.ip || "")) ? String(req.query.ip) : addresses[0];
+  if (!ip) return res.status(404).json({ ok: false, error: "Sem rede" });
+  const qr = require("qrcode-generator")(0, "M");
+  qr.addData(`http://${ip}:${HTTP_PORT}/overlay/menu.html`);
+  qr.make();
+  res.type("image/svg+xml").send(qr.createSvgTag({ cellSize: 6, margin: 3, scalable: true }));
+});
+
+app.post("/api/lan", (req, res) => {
+  lanOverlays = !!(req.body && req.body.enabled);
+  settings.set("lanOverlays", lanOverlays || null);
+  if (!lanOverlays) wss.dropRemote(); // desligou: quem estava conectado de outro aparelho sai
+  console.log(lanOverlays ? "Overlays liberadas para a rede local." : "Overlays so neste computador.");
+  res.json({ ok: true, enabled: lanOverlays, port: Number(HTTP_PORT), addresses: lanAddresses() });
+});
 
 const raceState = createRaceState();
 
@@ -731,7 +786,10 @@ function acceptPayload(payload) {
 function handleGamePayload(payload) {
   if (!acceptPayload(payload)) return;
   // LMU: o carro em foco vem da API do jogo (funciona tambem como espectador)
-  if (payload.game === "lmu") lmuFocus.apply(payload);
+  if (payload.game === "lmu") {
+    lmuFocus.apply(payload);
+    lmuIdentity.apply(payload); // numero e equipe das pinturas nao oficiais (API local do jogo)
+  }
   const data = raceState.apply(payload);
   noteSessionNames(data && data.standings);
   if (data && sessionLog.apply(data)) wss.broadcast(sessionLogPayload());

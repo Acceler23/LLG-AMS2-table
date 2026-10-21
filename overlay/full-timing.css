@@ -140,11 +140,18 @@ html, body {
   align-items: center;
 }
 
+/* lista continua: mostra ate o fim da janela; a lista desliza para o piloto em foco */
+.ft-viewport {
+  overflow: hidden;
+}
+
 #ftRows {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 3px;
   padding: 3px 0;
+  transition: transform 0.6s ease;
 }
 
 .ft-row {
@@ -173,6 +180,36 @@ html, body {
 }
 
 .ft-row.player .c-name { font-weight: 800; }
+
+/* ---- classificacao e treino: melhor tempo, diferenca e parciais ---- */
+#full-timing.quali .ft-head,
+#full-timing.quali .ft-row {
+  grid-template-columns: 60px 60px minmax(0, 1fr) 54px minmax(0, 260px) 150px 130px 130px 130px 130px;
+}
+
+#full-timing.quali.single-class .ft-head,
+#full-timing.quali.single-class .ft-row {
+  grid-template-columns: 60px minmax(0, 1fr) 54px minmax(0, 260px) 150px 130px 130px 130px 130px;
+}
+
+.c-sec {
+  justify-content: center;
+  margin: 0 2px;
+  white-space: nowrap;
+}
+
+.ft-row .c-sec {
+  margin: 5px 3px;
+  border-radius: 3px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+/* cores do WEC: roxo melhor da classe, verde melhor do piloto, amarelo pior, vermelho volta invalida */
+.ft-row .c-sec.sec-purple { background-color: #c44dff; color: #fff; }
+.ft-row .c-sec.sec-green { background-color: #2fe06a; color: #0a2d52; }
+.ft-row .c-sec.sec-yellow { background-color: #ffd21f; color: #0a2d52; }
+.ft-row .c-sec.sec-red { background-color: #ff3b3b; color: #fff; }
 
 /* em disputa (mesma regra da pagina de disputas): um leve brilho ambar no comeco da linha */
 .ft-row.battle {
@@ -212,6 +249,21 @@ html, body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* punicao pendente, ao lado do nome do piloto */
+.pen-badge {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background-color: #ff3b3b;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+.pen-badge[hidden] { display: none; }
 
 .c-logo { justify-content: center; }
 

@@ -26,6 +26,10 @@ param(
     [int]$ParentPid = 0
 )
 
+# Prioridade abaixo do normal: com a CPU disputada, o Windows atende o jogo
+# primeiro e este script usa so o que sobra (menos engasgo em PC mais fraco).
+try { (Get-Process -Id $PID).PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
+
 # ---------------------------------------------------------------- offsets
 $LAYOUT_SIZE          = 324824
 $MAX_VEHICLES         = 104

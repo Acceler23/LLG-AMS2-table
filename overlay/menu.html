@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LLG Overlay</title>
+  <!-- Mini painel para outros aparelhos da rede local (celular, tablet, outro
+       PC): escolhe qual overlay abrir. O QR code do painel principal (aba
+       Configuracao) aponta para esta pagina. -->
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      min-height: 100%;
+      background: rgb(14, 58, 102);
+      color: #fff;
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+    header {
+      padding: 18px 16px;
+      background: #0b5ed7;
+      border-bottom: 3px solid #00c5fd;
+    }
+    h1 { font-size: 22px; font-weight: 800; letter-spacing: 0.3px; text-transform: uppercase; }
+    header p { margin-top: 4px; font-size: 14px; opacity: 0.85; }
+    main {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    a.item {
+      display: block;
+      padding: 16px;
+      border-radius: 8px;
+      background: rgb(14, 66, 165);
+      border-left: 5px solid #00c5fd;
+      color: #fff;
+      text-decoration: none;
+    }
+    a.item:active { background: rgb(0, 107, 221); }
+    a.item strong { display: block; font-size: 18px; font-weight: 800; }
+    a.item span { display: block; margin-top: 4px; font-size: 14px; opacity: 0.8; }
+    footer { padding: 8px 16px 24px; font-size: 13px; opacity: 0.7; text-align: center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>LLG Overlay</h1>
+    <p>Escolha a tabela para abrir neste aparelho.</p>
+  </header>
+  <main>
+    <a class="item" href="timing-table.html"><strong>Tabela de tempos</strong><span>A tabela da transmissão, com intervalos e páginas por classe.</span></a>
+    <a class="item" href="full-timing.html"><strong>Tabela completa</strong><span>Todos os carros com as colunas lado a lado e o log da sessão. Melhor na horizontal.</span></a>
+    <a class="item" href="driver-table.html"><strong>Tabela do piloto</strong><span>Compacta: os carros em volta do piloto em foco e a pontuação ao vivo.</span></a>
+    <a class="item" href="driver-card.html"><strong>Driver card</strong><span>O cartão do piloto em foco.</span></a>
+    <a class="item" href="track-stats.html"><strong>Estatísticas da pista</strong><span>Últimos vencedores, poles e recordes da pista.</span></a>
+  </main>
+  <footer>Para voltar a esta lista, use o botão voltar do navegador.</footer>
+</body>
+</html>

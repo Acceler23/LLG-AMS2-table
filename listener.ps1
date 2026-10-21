@@ -25,6 +25,10 @@ param(
 )
 
 $mapName = $MapName
+
+# Prioridade abaixo do normal: com a CPU disputada, o Windows atende o jogo
+# primeiro e este script usa so o que sobra (menos engasgo em PC mais fraco).
+try { (Get-Process -Id $PID).PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
 $bridgeHost = $BridgeHost
 $bridgePort = $BridgePort
 
@@ -57,6 +61,7 @@ $OFFSET_CUR_SECTOR3              = 7920
 $OFFSET_FAST_SECTOR1             = 8176  # float[64]
 $OFFSET_FAST_SECTOR2             = 8432
 $OFFSET_FAST_SECTOR3             = 8688
+$OFFSET_PIT_SCHEDULES            = 19548 # uint[64]: 5 = drive-through, 6 = stop & go (punicoes de cada carro)
 $OFFSET_FLAG_COLOURS             = 19804 # uint[64]
 $OFFSET_FLAG_REASONS             = 20060 # uint[64]
 $OFFSET_LAPS_INVALIDATED         = 9456  # bool[64]
@@ -180,6 +185,8 @@ $script:view = $null
 $script:snapshot = $null
 $script:lastSeq = $null
 $script:lastSeqChange = [DateTime]::UtcNow
+$script:sentSeq = -1 # sequencia do ultimo envio (ver o loop principal)
+$script:sentAt = [DateTime]::MinValue
 $script:tornCycles = 0
 $script:tornWarned = $false
 
@@ -357,6 +364,12 @@ while ($true) {
                     Start-Sleep -Milliseconds 20
                     continue
                 }
+                # o jogo nao escreveu nada novo (menu, pausa): nao refaz o trabalho;
+                # manda de novo so 1x por segundo, para o servidor saber que o jogo esta aberto
+                if ($script:lastSeq -eq $script:sentSeq -and ([DateTime]::UtcNow - $script:sentAt).TotalMilliseconds -lt 1000) {
+                    Start-Sleep -Milliseconds $IntervalMs
+                    continue
+                }
                 $buf = $script:snapshot
 
                 $numParticipants = [BitConverter]::ToInt32($buf, $OFFSET_NUM_PARTICIPANTS)
@@ -415,6 +428,7 @@ while ($true) {
                     $fs3 = [BitConverter]::ToSingle($buf, $OFFSET_FAST_SECTOR3 + ($i * 4))
                     $flagColour = [BitConverter]::ToUInt32($buf, $OFFSET_FLAG_COLOURS + ($i * 4))
                     $flagReason = [BitConverter]::ToUInt32($buf, $OFFSET_FLAG_REASONS + ($i * 4))
+                    $pitSchedule = [BitConverter]::ToUInt32($buf, $OFFSET_PIT_SCHEDULES + ($i * 4))
                     $lapInvalid = $buf[$OFFSET_LAPS_INVALIDATED + $i] -ne 0
 
                     if ($inRace -and $raceState -eq 0) { continue }
@@ -457,6 +471,8 @@ while ($true) {
                         # so carros lentos/parados (<40 km/h) como proxy do causador.
                         causedYellow  = (($flagColour -eq 6 -or $flagColour -eq 7) -and $speedKmh -lt 40)
                         lapInvalidated = [bool]$lapInvalid
+                        # punicao pendente do carro (o 7, vaga do box ocupada, nao e punicao)
+                        penaltyType   = if ($pitSchedule -eq 5) { "driveThrough" } elseif ($pitSchedule -eq 6) { "stopGo" } else { $null }
                     }
                     if ($i -eq $viewedIndex) {
                         if ($splitAhead -ge 0) {
@@ -584,6 +600,8 @@ while ($true) {
 
                 $stream.Write($lengthBytes, 0, 4)
                 $stream.Write($payloadBytes, 0, $payloadBytes.Length)
+                $script:sentSeq = $script:lastSeq
+                $script:sentAt = [DateTime]::UtcNow
                 if ($lastNoDataMsg) {
                     $lastNoDataMsg = $null
                     Write-Host "Recebendo dados do jogo."

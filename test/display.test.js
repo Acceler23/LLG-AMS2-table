@@ -154,3 +154,25 @@ test("etapa do RLT: nome colado do jogo bate com o nome com espaco", () => {
   assert.equal(display.matchEvent(events, ["campogrande"], 0).round, 4);
   assert.equal(display.matchEvent(events, ["Interlagos"], 0), null);
 });
+
+test("logo do carro: nome inteiro, trecho com * e por fim a marca", () => {
+  display.setConfig({
+    carLogos: { Chevrolet: "chevrolet.png", Corvette: "corvette.png", "*Corvette": "corvette.png", "Copa Uno": "fiat.png", Porsche: "porsche.png" },
+    teamLogoOverrides: {},
+  });
+  assert.equal(display.carLogo("Corvette Z06 GT3.R"), "corvette.png"); // LMU
+  assert.equal(display.carLogo("Chevrolet Corvette C8.R"), "corvette.png"); // * vence a marca
+  assert.equal(display.carLogo("Chevrolet Camaro"), "chevrolet.png");
+  assert.equal(display.carLogo("Copa Uno"), "fiat.png");
+  assert.equal(display.carLogo("Porsche 911 GT3 R"), "porsche.png");
+  assert.equal(display.carLogo(""), undefined);
+});
+
+test("logo da equipe: painel, nome exato, trecho com * e por fim o nome", () => {
+  display.setConfig({ carLogos: {}, teamLogoOverrides: { Apex: "apex_racing.png", "*WRT": "wrt.png", "*square": "square.png" } });
+  assert.equal(display.teamLogoFile("Apex", {}), "apex_racing.png");
+  assert.equal(display.teamLogoFile("BMW M Team WRT", {}), "wrt.png"); // nome do LMU
+  assert.equal(display.teamLogoFile("SQUARE Racing #12", {}), "square.png"); // sem diferenciar maiusculas
+  assert.equal(display.teamLogoFile("Hell Machine", {}), "hell_machine.png");
+  assert.equal(display.teamLogoFile("BMW M Team WRT", { "BMW M Team WRT": "outro.png" }), "outro.png"); // o painel vence
+});

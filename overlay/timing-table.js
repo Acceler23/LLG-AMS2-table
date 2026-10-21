@@ -624,6 +624,7 @@ function connect() {
     } catch (_) {
       return;
     }
+    LLGFrameCap.handle(msg); // limite de FPS do painel
     if (msg.type === "standings") {
       handleStandings(msg.data || []);
     } else if (msg.type === "hello") {
@@ -1983,7 +1984,12 @@ function updateFastLapClock(standings, sideOffset) {
   for (let i = rows.length; i < clockEls.length; i++) clockEls[i].classList.remove("visible");
 }
 
+// redesenho com o limite de FPS do painel (shared/framecap.js)
 function render(standings) {
+  return LLGFrameCap.run(renderNow, [standings]);
+}
+
+function renderNow(standings) {
   // game-lmu: so abre espaco a esquerda no modo ?clock=left (ver CSS)
   document.getElementById("timing-table").classList.toggle("game-lmu", latestGame === "lmu" && !showingStandings());
   updateBattles(standings); // antes de montar a tabela: define destaque e trava do rodizio

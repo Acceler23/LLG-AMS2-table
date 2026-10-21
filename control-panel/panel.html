@@ -99,11 +99,20 @@
 
     <h3>Link da tabela completa</h3>
     <div class="box">
-      <div class="muted">Todos os carros com as colunas lado a lado (posição, classe, equipe, intervalos, voltas e stint) e, à direita, o log da corrida (ultrapassagens, melhores voltas, box e punições). Só aparece em corrida. Tamanho sugerido 1920×1000; com mais de 20 carros as páginas se alternam.</div>
+      <div class="muted">Todos os carros com as colunas lado a lado (posição, classe, equipe, intervalos, voltas e stint) e, à direita, o log da corrida (ultrapassagens, melhores voltas, box e punições). Também em classificação e treino (melhor tempo e parciais). Tamanho sugerido 1920×1080: a lista mostra os carros que couberem na altura da fonte.</div>
       <div class="row">
         <input id="linkFull" type="text" readonly onclick="this.select()" />
         <button onclick="copyLink('linkFull')">Copiar</button>
       </div>
+      <div class="row">
+        <label title="Com mais carros do que cabem na altura da fonte, a lista desliza para deixar o piloto em foco no meio."><input id="fullCenter" type="checkbox" style="width:auto" onchange="setFullCenter(this.checked)" /> Manter o piloto em foco no meio da tabela</label>
+      </div>
+      <div class="row wrap">
+        <button onclick="send('overlay.fullScroll', { dir: -1 })">▲ Subir</button>
+        <button onclick="send('overlay.fullScroll', { dir: 1 })">▼ Descer</button>
+        <button onclick="send('overlay.fullScroll', { dir: 0 })" title="Desfaz a rolagem manual: volta ao topo, ou ao piloto em foco se a opção acima estiver ligada.">Voltar</button>
+      </div>
+      <div class="muted">Subir/Descer rolam a lista meia tela por vez. Com a opção acima ligada, a rolagem manual vale por 20 s e depois a lista volta para o piloto em foco.</div>
     </div>
   </section>
 
@@ -210,6 +219,9 @@
     <h3>Aparência</h3>
     <div class="box">
       <div class="row">
+        <label title="Redesenha as overlays (inclusive a janela sobre o jogo) no máximo 30 vezes por segundo e desliga as animações. Para PCs mais fracos."><input id="maxFps30" type="checkbox" style="width:auto" onchange="setMaxFps(this.checked)" /> Limitar as overlays a 30 FPS (sem animações)</label>
+      </div>
+      <div class="row">
         <label class="muted" style="min-width:140px">Opacidade da tabela</label>
         <input id="opTable" type="range" min="0" max="100" value="100" oninput="setOpacity('table', this.value)" />
         <span id="opTableVal" class="muted" style="min-width:36px">100%</span>
@@ -310,6 +322,16 @@
         <button onclick="clearRlt()" title="Apaga a chave e a temporada deste computador">Limpar</button>
       </div>
       <div class="muted" id="rltStatus"></div>
+    </div>
+
+    <h3>Overlays na rede local</h3>
+    <div class="box">
+      <div class="muted">Abre as tabelas em navegadores de outros aparelhos na mesma rede (celular, tablet, outro PC). Eles só veem as overlays: o painel e os comandos continuam só neste computador.</div>
+      <div class="row">
+        <label><input id="lanOverlays" type="checkbox" style="width:auto" onchange="setLan(this.checked)" /> Liberar as overlays para a rede local</label>
+      </div>
+      <div id="lanLinks"></div>
+      <div class="muted" id="lanStatus"></div>
     </div>
 
     <h3>Assetto Corsa 1</h3>

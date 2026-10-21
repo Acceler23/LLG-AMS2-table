@@ -444,7 +444,12 @@ function renderTitle() {
   }
 }
 
+// redesenho com o limite de FPS do painel (shared/framecap.js)
 function render() {
+  return LLGFrameCap.run(renderNow, []);
+}
+
+function renderNow() {
   const root = document.getElementById("driver-table");
   if (!standings.length) {
     root.classList.add("hidden");
@@ -506,6 +511,7 @@ function connect() {
     } catch (_) {
       return;
     }
+    LLGFrameCap.handle(msg); // limite de FPS do painel
     if (msg.type === "standings") {
       handleStandings(msg.data);
     } else if (msg.type === "hello") {

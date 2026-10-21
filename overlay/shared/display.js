@@ -107,10 +107,17 @@
   }
 
   // Arquivo do logo da montadora, pelo nome do carro.
+  // Ordem: o nome inteiro do carro; uma chave com "*" cujo trecho esteja no
+  // nome ("*Corvette" pega "Chevrolet Corvette C8.R", sem diferenciar
+  // maiusculas); e por fim a primeira palavra (a marca).
   function carLogo(carName) {
     const logos = config().carLogos;
     if (!logos) return undefined;
-    return logos[manufacturerName(carName)] || logos[carName];
+    if (carName && logos[carName]) return logos[carName];
+    const name = String(carName || "").toLowerCase();
+    const hit = name && Object.keys(logos).find((k) => k.startsWith("*") && k.length > 1 && name.includes(k.slice(1).toLowerCase()));
+    if (hit) return logos[hit];
+    return logos[manufacturerName(carName)];
   }
 
   // Equipe com nome de montadora (ex: "Porsche", "McLaren") usa o logo dela.
@@ -130,11 +137,17 @@
   // Arquivo do logo da equipe. Ordem: escolha feita no painel (localOverrides),
   // TEAM_LOGO_OVERRIDES do drivers-config.js, e por fim o nome em minusculas
   // com "_" (ex: "Hell Machine" -> hell_machine.png).
+  // Depois do nome exato, uma chave com "*" cujo trecho esteja no nome da
+  // equipe ("*WRT" pega "BMW M Team WRT"), igual ao CAR_LOGOS: assim o nome que
+  // o jogo informa (LMU, sem temporada do RLT) tambem acha o logo.
   function teamLogoFile(teamName, localOverrides) {
     if (!teamName) return null;
     if (localOverrides && localOverrides[teamName]) return localOverrides[teamName];
     const overrides = config().teamLogoOverrides || {};
     if (overrides[teamName]) return overrides[teamName];
+    const name = String(teamName).toLowerCase();
+    const hit = Object.keys(overrides).find((k) => k.startsWith("*") && k.length > 1 && name.includes(k.slice(1).toLowerCase()));
+    if (hit) return overrides[hit];
     const slug = teamSlug(teamName);
     return slug ? `${slug}.png` : null;
   }

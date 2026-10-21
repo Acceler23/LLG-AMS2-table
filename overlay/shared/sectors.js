@@ -21,8 +21,12 @@
     const cars = new Map(); // nome -> estado
     const empty = () => [null, null, null];
 
+    // melhor parcial de cada classe na ultima leitura (para o roxo na hora de mostrar)
+    let latestClassBest = new Map();
+
     function reset() {
       cars.clear();
+      latestClassBest = new Map();
     }
 
     function state(name) {
@@ -77,6 +81,7 @@
         st.invalid = !!e.lapInvalidated;
         const cur = [e.sector1Ms, e.sector2Ms, e.sector3Ms];
         const key = classKeyOf ? classKeyOf(e) : "";
+        st.classKey = key;
         const cBest = classBest.get(key) || empty();
         const own = payloadBest(e);
         const leader = classLeader.get(key);
@@ -129,19 +134,30 @@
         }
         st.sector = sec;
       });
+      latestClassBest = classBest; // ja com as parciais fechadas nesta leitura
     }
 
     // [{ ms, color, deltaMs }, x3]: ms nulo = parcial ainda nao fechada;
     // deltaMs nulo = sem referencia para comparar
+    // A cor e decidida quando a parcial fecha, mas o roxo e conferido de novo
+    // aqui: so fica roxa a parcial que AINDA e a melhor da classe. Se outro
+    // carro ja fez melhor, ela vira verde (continua sendo a melhor do piloto),
+    // senao varios carros ficariam com a mesma parcial em roxo.
+    function shown(st, color, ms, i) {
+      if (color !== "purple" || ms == null) return color;
+      const best = latestClassBest.get(st.classKey);
+      return best && best[i] != null && ms > best[i] ? "green" : "purple";
+    }
+
     function view(name, now) {
       const st = cars.get(name);
       const blank = [0, 1, 2].map(() => ({ ms: null, color: null, deltaMs: null }));
       if (!st) return blank;
       const started = st.times.some((t) => t != null);
       if (st.hold && now < st.hold.until && !started) {
-        return st.hold.times.map((ms, i) => ({ ms, color: st.hold.colors[i], deltaMs: st.hold.deltas[i] }));
+        return st.hold.times.map((ms, i) => ({ ms, color: shown(st, st.hold.colors[i], ms, i), deltaMs: st.hold.deltas[i] }));
       }
-      return st.times.map((ms, i) => ({ ms, color: ms == null ? null : st.invalid ? "red" : st.colors[i], deltaMs: ms == null ? null : st.deltas[i] }));
+      return st.times.map((ms, i) => ({ ms, color: ms == null ? null : st.invalid ? "red" : shown(st, st.colors[i], ms, i), deltaMs: ms == null ? null : st.deltas[i] }));
     }
 
     return { update, view, reset };

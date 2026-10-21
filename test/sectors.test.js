@@ -108,3 +108,18 @@ test("delta: para a melhor parcial do lider da classe; o lider compara com a pro
   u.update([car("Só", 1, 30000, null, null)], cls, 100);
   assert.equal(u.view("Só", 100)[0].deltaMs, null);
 });
+
+test("so a melhor parcial da classe fica roxa: a roxa batida por outro carro vira verde", () => {
+  const t = createSectorTracker();
+  t.update([car("A", 0, null, null, null), car("B", 0, null, null, null)], cls, 0);
+  // A fecha o S1 com 30.0: melhor da classe
+  t.update([car("A", 1, 30000, null, null), car("B", 0, null, null, null)], cls, 100);
+  assert.equal(t.view("A", 100)[0].color, "purple");
+  // B fecha o S1 com 29.8: agora B e o roxo e A vira verde (continua a melhor dele)
+  t.update([car("A", 1, 30000, null, null), car("B", 1, 29800, null, null)], cls, 200);
+  assert.equal(t.view("B", 200)[0].color, "purple");
+  assert.equal(t.view("A", 200)[0].color, "green");
+  // outra classe mais rapida nao tira o roxo
+  t.update([car("A", 1, 30000, null, null), car("B", 1, 29800, null, null), car("C", 1, 25000, null, null, { carClass: "LMP2" })], cls, 300);
+  assert.equal(t.view("B", 300)[0].color, "purple");
+});

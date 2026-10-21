@@ -283,6 +283,73 @@ function setBattleScope(value) {
   send("overlay.setBattleScope", { value });
 }
 
+// ---------------------------------------------------------------- rede local
+// Overlays em outros aparelhos da mesma rede: link e QR code do mini painel
+// (overlay/menu.html), com o endereco deste PC
+
+function showLan(body) {
+  document.getElementById("lanOverlays").checked = !!body.enabled;
+  const links = document.getElementById("lanLinks");
+  const ip = (body.addresses || [])[0];
+  if (!body.enabled) {
+    links.innerHTML = "";
+    document.getElementById("lanStatus").textContent = "Desligado: as overlays só abrem neste computador.";
+    return;
+  }
+  if (!ip) {
+    links.innerHTML = "";
+    document.getElementById("lanStatus").textContent = "Ligado, mas este computador não está conectado a nenhuma rede.";
+    return;
+  }
+  // mini painel (overlay/menu.html): o outro aparelho escolhe a tabela la
+  const url = `http://${ip}:${body.port}/overlay/menu.html`;
+  links.innerHTML = `
+    <div class="row"><label class="muted" style="min-width:150px">Mini painel</label><input id="lanMenu" type="text" readonly value="${escapeAttr(url)}" onclick="this.select()" /><button onclick="copyLink('lanMenu')">Copiar</button></div>
+    <div style="display:flex; gap:14px; align-items:center; margin-top:8px">
+      <img src="/api/lan/qr.svg?ip=${encodeURIComponent(ip)}&t=${Date.now()}" alt="QR code do mini painel" style="width:170px; height:170px; background:#fff; border-radius:6px" />
+      <div class="muted">Aponte a câmera do celular para o QR code: abre o mini painel, onde se escolhe qual tabela mostrar naquele aparelho.</div>
+    </div>`;
+  const others = (body.addresses || []).slice(1);
+  document.getElementById("lanStatus").textContent =
+    "Os dois aparelhos precisam estar na mesma rede. Se não abrir, libere o LLG Overlay no Firewall do Windows para redes privadas." +
+    (others.length ? ` Outros endereços deste PC: ${others.join(", ")}.` : "");
+}
+
+async function setLan(on) {
+  try {
+    showLan(await api("/api/lan", { method: "POST", body: JSON.stringify({ enabled: !!on }) }));
+    log(on ? "Overlays liberadas para a rede local" : "Overlays só neste computador");
+  } catch (e) {
+    log("ERRO rede local: " + e.message);
+  }
+}
+
+api("/api/lan").then(showLan).catch(() => {});
+
+// Limite de 30 FPS nas overlays (shared/framecap.js)
+function setMaxFps(on) {
+  try {
+    localStorage.setItem("maxFpsPanel", on ? "1" : "0");
+  } catch (_) {}
+  send("overlay.setMaxFps", { value: on ? 30 : 0 });
+}
+
+try {
+  document.getElementById("maxFps30").checked = localStorage.getItem("maxFpsPanel") === "1";
+} catch (_) {}
+
+// Tabela completa: manter o piloto em foco no meio da lista
+function setFullCenter(on) {
+  try {
+    localStorage.setItem("fullCenterPanel", on ? "1" : "0");
+  } catch (_) {}
+  send("overlay.setFullCenter", { value: !!on });
+}
+
+try {
+  document.getElementById("fullCenter").checked = localStorage.getItem("fullCenterPanel") === "1";
+} catch (_) {}
+
 // o menu abre na ultima escolha
 try {
   const savedScope = localStorage.getItem("battleScopePanel");

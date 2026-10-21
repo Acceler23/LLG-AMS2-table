@@ -15,7 +15,9 @@ function createWsServer(httpServer, options) {
 
   let onConnectHook = null;
 
-  wss.on("connection", (socket) => {
+  wss.on("connection", (socket, req) => {
+    // so quem pode mandar comandos (este computador); outros aparelhos da rede so recebem os dados
+    socket.canCommand = typeof opts.canCommand === "function" ? !!opts.canCommand(req) : true;
     clients.add(socket);
     console.log(`Cliente conectado (${clients.size} ativos)`);
     if (typeof onConnectHook === "function") {
@@ -32,6 +34,7 @@ function createWsServer(httpServer, options) {
       }
 
       // Formato esperado: { type: "command", name: "...", payload: {...} }
+      if (msg.type === "command" && !socket.canCommand) return; // aparelho da rede: so le
       if (msg.type === "command") {
         if (msg.name && String(msg.name).startsWith("overlay.")) {
           const payload = JSON.stringify({ type: "overlayCommand", name: msg.name, payload: msg.payload || {} });
@@ -69,6 +72,12 @@ function createWsServer(httpServer, options) {
     },
     onConnect(handler) {
       onConnectHook = handler;
+    },
+    // fecha as conexoes de quem nao e deste computador (rede local desligada)
+    dropRemote() {
+      for (const c of clients) {
+        if (!c.canCommand) c.terminate();
+      }
     },
   };
 }

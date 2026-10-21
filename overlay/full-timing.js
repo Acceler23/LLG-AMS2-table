@@ -4,7 +4,12 @@
 //   intervalo para o lider | intervalo para o da frente | ultima volta |
 //   melhor volta (com o numero da volta) | voltas desde a ultima parada |
 //   posicoes ganhas/perdidas desde a largada (geral grande, na classe pequeno)
-// So aparece em corrida. Com mais carros do que cabem, as paginas se alternam.
+// Em classificacao, treino e time attack as colunas sao outras: posicao,
+// posicao na classe, piloto, logo do carro, equipe/carro, melhor tempo,
+// diferenca para o lider e as parciais (S1, S2, S3) da volta em andamento, nas
+// cores do WEC. A lista e continua (todos os carros); a parte que aparece vai
+// ate a altura da janela/fonte do OBS. Com a opcao do painel ligada, a lista
+// desliza para deixar o piloto em foco no meio.
 // A direita, o log da corrida (server/sessionLog.js): ultrapassagens, melhores
 // voltas, entradas e saidas do box e punicoes, com a volta e o tempo de corrida.
 // Tecla 0 (junto com a tabela de tempos): a pontuacao do campeonato separada
@@ -14,7 +19,6 @@
 
 const WS_URL = `ws://${location.hostname}:${location.port || 8080}/ws`;
 const BASE_WIDTH = 1920; // largura do desenho em px (full-timing.css)
-const ROWS_PER_PAGE = 20;
 const PAGE_MS = 10000;
 const RLT_MATCH_MIN = 0.98;
 
@@ -251,10 +255,29 @@ function setGain(el, diff) {
   el.className = el.className.replace(/ (up|down|same)$/, "") + (diff > 0 ? " up" : diff < 0 ? " down" : " same");
 }
 
+// Aviso de punicao pendente ao lado do nome: DT (drive-through) ou SG (stop &
+// go) no AMS2; no LMU o jogo so informa quantas ha (PEN, ou PEN x2).
+const PENALTY_SHORT = { driveThrough: "DT", stopGo: "SG" };
+const PENALTY_NAMES = { driveThrough: "Drive-through", stopGo: "Stop & go" };
+function setPenaltyBadge(row, entry) {
+  const badge = row.querySelector(".pen-badge");
+  if (!badge) return;
+  let text = "";
+  if (entry.penaltyType && PENALTY_SHORT[entry.penaltyType]) text = PENALTY_SHORT[entry.penaltyType];
+  else if (entry.penalties > 0) text = entry.penalties > 1 ? `PEN x${entry.penalties}` : "PEN";
+  badge.textContent = text;
+  badge.hidden = !text || isDnf(entry);
+}
+
 let pageIndex = 0;
 let pageTimer = null;
 
+// redesenho com o limite de FPS do painel (shared/framecap.js)
 function render() {
+  return LLGFrameCap.run(renderNow, []);
+}
+
+function renderNow() {
   const root = document.getElementById("full-timing");
   const champ = showingChampionship();
   document.getElementById("ftStandings").hidden = !champ;
@@ -265,14 +288,25 @@ function render() {
     renderChampionship();
     return;
   }
+  const state = session ? Number(session.state) : null;
+  const timed = TIMED_LABELS[state] != null;
+  root.classList.toggle("quali", timed);
+  if (timed && standings.length) {
+    root.classList.remove("hidden");
+    renderHeader();
+    renderQuali();
+    return;
+  }
   document.getElementById("ftSessionLabel").textContent = "CORRIDA";
-  const race = session && Number(session.state) === 5;
+  const race = state === 5;
   if (!race || !standings.length) {
     root.classList.add("hidden");
     return;
   }
   root.classList.remove("hidden");
   renderHeader();
+  setTableMode("race");
+  document.querySelector(".ft-log-head").textContent = "LOG DA CORRIDA";
 
   const ordered = standings.slice().sort((a, b) => (isDnf(a) ? 1 : 0) - (isDnf(b) ? 1 : 0) || (a.position || 999) - (b.position || 999));
   const classes = new Set(ordered.map((e) => grouper.key(e, ordered)));
@@ -283,10 +317,8 @@ function render() {
   const bestOverall = Math.min(...ordered.map((e) => (e.fastestLapMs > 0 ? e.fastestLapMs : Infinity)));
   const leader = ordered[0];
 
-  const pages = Math.max(1, Math.ceil(ordered.length / ROWS_PER_PAGE));
-  if (pageIndex >= pages) pageIndex = 0;
-  const shown = ordered.slice(pageIndex * ROWS_PER_PAGE, (pageIndex + 1) * ROWS_PER_PAGE);
-  document.getElementById("ftPage").textContent = pages > 1 ? `${pageIndex + 1}/${pages}` : "";
+  const shown = ordered; // lista continua: todos os carros
+  document.getElementById("ftPage").textContent = "";
 
   const rowsEl = document.getElementById("ftRows");
   while (rowsEl.children.length > shown.length) rowsEl.lastChild.remove();
@@ -298,7 +330,7 @@ function render() {
       row.innerHTML = `
         <div class="c-pos"></div>
         <div class="c-cls"></div>
-        <div class="c-name"><span class="c-text"></span></div>
+        <div class="c-name"><span class="c-text"></span><span class="pen-badge" hidden></span></div>
         <div class="c-logo"><img alt="" /></div>
         <div class="c-team"><span class="c-text"></span></div>
         <div class="c-num c-leader"></div>
@@ -327,6 +359,7 @@ function render() {
     }
     row.querySelector(".c-name .c-text").textContent = displayName(entry);
     row.querySelector(".c-team .c-text").textContent = teamName(entry) || LLGDisplay.carDisplayName(entry.carName); // sem equipe: o carro
+    setPenaltyBadge(row, entry);
 
     const img = row.querySelector(".c-logo img");
     const logoKey = `${entry.carName}|${teamName(entry)}`;
@@ -368,12 +401,80 @@ function render() {
     else stint.textContent = dnf ? "" : String((entry.pit && entry.pit.stintLaps) || 0);
   });
 
+  applyViewport(); // parte visivel e piloto em foco no meio
   fitLog(); // a altura da tabela pode ter mudado (carro entrou ou saiu)
-
-  ensurePaging(pages);
+  ensurePaging(1);
 }
 
-// Mais linhas do que cabem: alterna as paginas a cada PAGE_MS (tabela e pontuacao).
+// ---- lista continua: a parte visivel vai ate o fim da janela (fonte do OBS) ----
+const CENTER_KEY = "fullCenter";
+let centerFocus = false; // opcao do painel: manter o piloto em foco no meio
+try {
+  centerFocus = localStorage.getItem(CENTER_KEY) === "1";
+} catch (_) {}
+
+// Rolagem manual (botoes do painel ou roda do mouse): em linhas a partir do
+// topo. Com a centralizacao ligada, vale por MANUAL_HOLD_MS e depois a lista
+// volta para o piloto em foco; desligada, fica onde foi deixada.
+const MANUAL_HOLD_MS = 20000;
+let manualRow = null; // primeira linha visivel escolhida a mao (null = automatico)
+let manualUntil = 0;
+let lastFirstRow = 0; // primeira linha visivel agora (para a rolagem partir dela)
+let lastVisibleRows = 1;
+
+// dir: +1 desce, -1 sobe (meia tela por vez); 0 volta ao automatico
+function scrollManual(dir) {
+  if (!dir) {
+    manualRow = null;
+  } else {
+    const step = Math.max(1, Math.floor(lastVisibleRows / 2));
+    manualRow = Math.max(0, (manualRow != null ? manualRow : lastFirstRow) + dir * step);
+    manualUntil = Date.now() + MANUAL_HOLD_MS;
+  }
+  render();
+}
+
+function setCenterFocus(on) {
+  centerFocus = !!on;
+  try {
+    localStorage.setItem(CENTER_KEY, centerFocus ? "1" : "0");
+  } catch (_) {}
+  render();
+}
+
+function applyViewport() {
+  const vp = document.getElementById("ftViewport");
+  const rows = document.getElementById("ftRows");
+  const zoom = parseFloat(document.documentElement.style.zoom) || 1;
+  // da linha de cima da lista ate o fim da janela (em px do desenho, sem o zoom)
+  let top = 0;
+  for (let el = vp; el; el = el.offsetParent) top += el.offsetTop;
+  let visible = Math.max(80, Math.floor(window.innerHeight / zoom - top - 4));
+  // so linhas inteiras: nada cortado no meio embaixo nem em cima
+  const list = rows.children;
+  const pitch = list.length > 1 ? list[1].offsetTop - list[0].offsetTop : 0;
+  const first = list.length ? list[0].offsetTop : 0;
+  if (pitch > 0) visible = Math.max(pitch + first, first + Math.floor((visible - first) / pitch) * pitch);
+  vp.style.maxHeight = `${visible}px`;
+  const total = rows.scrollHeight;
+  let offset = 0;
+  if (manualRow != null && centerFocus && Date.now() > manualUntil) manualRow = null; // acabou o tempo: volta a centralizar
+  if (manualRow != null && total > visible && pitch > 0) {
+    offset = Math.min(total - visible, manualRow * pitch);
+    manualRow = Math.round(offset / pitch); // nao passa do fim da lista
+  } else if (centerFocus && total > visible) {
+    const me = rows.querySelector(".ft-row.player");
+    if (me) {
+      offset = Math.max(0, Math.min(total - visible, me.offsetTop + me.offsetHeight / 2 - visible / 2));
+      if (pitch > 0) offset = Math.min(total - visible, Math.round(offset / pitch) * pitch); // comeca no inicio de uma linha
+    }
+  }
+  rows.style.transform = offset ? `translateY(${-Math.round(offset)}px)` : "";
+  lastFirstRow = pitch > 0 ? Math.round(offset / pitch) : 0;
+  lastVisibleRows = pitch > 0 ? Math.max(1, Math.floor((visible - first) / pitch)) : 1;
+}
+
+// Mais linhas do que cabem: alterna as paginas a cada PAGE_MS (pontuacao).
 function ensurePaging(pages) {
   if (pages > 1 && !pageTimer) {
     pageTimer = setInterval(() => {
@@ -385,6 +486,129 @@ function ensurePaging(pages) {
     pageTimer = null;
     pageIndex = 0;
   }
+}
+
+// ---------------------------------------------------------------- classificacao e treino
+const TIMED_LABELS = { 1: "TREINO", 2: "TESTE", 3: "QUALI", 6: "TIME ATTACK" };
+const RACE_HEAD = document.querySelector(".ft-head").innerHTML;
+const QUALI_HEAD = `
+      <div class="c-pos">POS</div>
+      <div class="c-cls">CLS</div>
+      <div class="c-name">PILOTO</div>
+      <div class="c-logo"></div>
+      <div class="c-team">EQUIPE / CARRO</div>
+      <div class="c-num">MELHOR</div>
+      <div class="c-num">DIF. LÍDER</div>
+      <div class="c-sec">S1</div>
+      <div class="c-sec">S2</div>
+      <div class="c-sec">S3</div>`;
+let tableMode = "race";
+
+// Troca as colunas entre corrida e classificacao (as linhas sao refeitas)
+function setTableMode(mode) {
+  if (tableMode === mode) return;
+  tableMode = mode;
+  document.querySelector(".ft-head").innerHTML = mode === "quali" ? QUALI_HEAD : RACE_HEAD;
+  document.getElementById("ftRows").innerHTML = "";
+}
+
+// Parciais da volta em andamento (shared/sectors.js, as mesmas do driver card)
+const sectorTracker = LLGSectors.createSectorTracker();
+
+// Logo do carro, piloto, equipe e posicao na classe: iguais nas duas tabelas
+function fillIdentity(row, entry, multiClass, classPos) {
+  const clsCell = row.querySelector(".c-cls");
+  if (multiClass) {
+    const color = classColor(grouper.key(entry, standings));
+    clsCell.textContent = classPos != null ? String(classPos) : "-";
+    clsCell.style.backgroundColor = color;
+    clsCell.style.color = textOn(color);
+  }
+  row.querySelector(".c-name .c-text").textContent = displayName(entry);
+  row.querySelector(".c-team .c-text").textContent = teamName(entry) || LLGDisplay.carDisplayName(entry.carName); // sem equipe: o carro
+  setPenaltyBadge(row, entry);
+  const img = row.querySelector(".c-logo img");
+  const logoKey = `${entry.carName}|${teamName(entry)}`;
+  if (img.dataset.key !== logoKey) {
+    img.dataset.key = logoKey;
+    const paths = carLogoPaths(entry);
+    if (paths.length) logoLoader.load(img, paths);
+    else logoLoader.hide(img);
+  }
+}
+
+function renderQuali() {
+  setTableMode("quali");
+  document.querySelector(".ft-log-head").textContent = "LOG DA SESSÃO";
+  const root = document.getElementById("full-timing");
+  document.getElementById("ftSessionLabel").textContent = TIMED_LABELS[Number(session.state)];
+
+  // pela melhor volta; quem ainda nao tem tempo vai para o fim
+  const timed = (e) => e.fastestLapMs > 0;
+  const ordered = standings
+    .slice()
+    .sort((a, b) => (timed(a) ? 0 : 1) - (timed(b) ? 0 : 1) || (timed(a) && timed(b) ? a.fastestLapMs - b.fastestLapMs : (a.position || 999) - (b.position || 999)));
+  const classes = new Set(ordered.map((e) => grouper.key(e, ordered)));
+  const multiClass = classes.size > 1;
+  root.classList.toggle("single-class", !multiClass);
+
+  // posicao na classe pela melhor volta
+  const classPos = new Map();
+  const counters = new Map();
+  ordered.forEach((e) => {
+    const k = grouper.key(e, ordered);
+    const n = (counters.get(k) || 0) + 1;
+    counters.set(k, n);
+    classPos.set(e.name, timed(e) ? n : null);
+  });
+  const leaderBest = ordered.length && timed(ordered[0]) ? ordered[0].fastestLapMs : null;
+
+  const shown = ordered; // lista continua: todos os carros
+  document.getElementById("ftPage").textContent = "";
+
+  const now = Date.now();
+  const rowsEl = document.getElementById("ftRows");
+  while (rowsEl.children.length > shown.length) rowsEl.lastChild.remove();
+  shown.forEach((entry, i) => {
+    let row = rowsEl.children[i];
+    if (!row) {
+      row = document.createElement("div");
+      row.className = "ft-row";
+      row.innerHTML = `
+        <div class="c-pos"></div>
+        <div class="c-cls"></div>
+        <div class="c-name"><span class="c-text"></span><span class="pen-badge" hidden></span></div>
+        <div class="c-logo"><img alt="" /></div>
+        <div class="c-team"><span class="c-text"></span></div>
+        <div class="c-num c-qbest"></div>
+        <div class="c-num c-qgap"></div>
+        <div class="c-sec"></div>
+        <div class="c-sec"></div>
+        <div class="c-sec"></div>`;
+      rowsEl.appendChild(row);
+    }
+    const idx = ordered.indexOf(entry);
+    row.classList.toggle("player", !!entry.isPlayer);
+    row.querySelector(".c-pos").textContent = timed(entry) ? String(idx + 1) : "-";
+    fillIdentity(row, entry, multiClass, classPos.get(entry.name));
+
+    const best = row.querySelector(".c-qbest");
+    best.textContent = timed(entry) ? formatTime(entry.fastestLapMs) : "";
+    best.className = "c-num c-qbest" + (timed(entry) && entry.fastestLapMs === leaderBest ? " t-purple" : "");
+    const gap = row.querySelector(".c-qgap");
+    gap.textContent = timed(entry) && leaderBest != null && entry.fastestLapMs > leaderBest ? plusSeconds((entry.fastestLapMs - leaderBest) / 1000) : "";
+
+    // S1, S2, S3 da volta em andamento, na cor da parcial
+    const cells = row.querySelectorAll(".c-sec");
+    sectorTracker.view(entry.name, now).forEach((sec, k) => {
+      cells[k].textContent = sec.ms != null ? (sec.ms / 1000).toFixed(3) : "";
+      cells[k].className = "c-sec" + (sec.ms != null && sec.color ? ` sec-${sec.color}` : "");
+    });
+  });
+
+  applyViewport(); // parte visivel e piloto em foco no meio
+  fitLog(); // o log acompanha a altura da tabela
+  ensurePaging(1);
 }
 
 // ---------------------------------------------------------------- pontuacao (tecla 0)
@@ -562,7 +786,8 @@ function logItem(ev) {
     type = "Saiu do box";
     const diff = (ev.positionAfter || 0) - (ev.positionBefore || 0);
     const change = diff > 0 ? `-${diff}` : diff < 0 ? `+${-diff}` : "=";
-    body = line("", "", nameOf(ev.driver), `P${ev.positionBefore} → P${ev.positionAfter} (${change})`);
+    // fora da corrida a posicao nao muda pelo box: sem posicoes ganhas/perdidas
+    body = line("", "", nameOf(ev.driver), ev.race === false ? "" : `P${ev.positionBefore} → P${ev.positionAfter} (${change})`);
     const times = ev.totalMs != null ? `Box ${shortTime(ev.totalMs)} · parado ${shortTime(ev.stoppedMs)} · andando ${shortTime(ev.movingMs)}` : `Parado ${shortTime(ev.stoppedMs)}`;
     body += `<div class="lg-detail">${escapeHtml(times)}</div>`;
     const extra = [];
@@ -572,7 +797,9 @@ function logItem(ev) {
     if (extra.length) body += `<div class="lg-detail">${escapeHtml(extra.join(" · "))}</div>`;
   } else if (ev.type === "penalty" || ev.type === "penaltyServed" || ev.type === "disqualified") {
     cls = "lg-penalty";
-    type = ev.type === "penalty" ? "Punição" : ev.type === "penaltyServed" ? "Cumpriu punição" : "Desclassificado";
+    // tipo da punicao: o AMS2 informa (drive-through, stop & go); o LMU nao
+    const kind = ev.kind && PENALTY_NAMES[ev.kind] ? `: ${PENALTY_NAMES[ev.kind]}` : "";
+    type = ev.type === "penalty" ? `Punição${kind}` : ev.type === "penaltyServed" ? `Cumpriu punição${kind}` : "Desclassificado";
     const right = ev.type === "disqualified" ? "" : ev.pending > 0 ? `${ev.pending} pendente${ev.pending > 1 ? "s" : ""}` : "";
     body = line("", "", nameOf(ev.driver), right);
   } else if (ev.type === "yellow") {
@@ -671,12 +898,15 @@ function handleStandings(payload) {
     heldGaps.clear();
     frozenGaps.clear();
     battleDetector.reset();
+    sectorTracker.reset();
   }
   const raw = payload.standings || [];
   LLGDisplay.applyGameClassNames(raw, game); // classes do jogo com os nomes do drivers-config
   standings = raw.filter((e) => e && e.name && !isSafetyCar(e));
   gapTracker.update(standings, payload.ts || Date.now());
   updateBattles();
+  // parciais por classe (a roxa e a melhor da classe), so fora da corrida
+  if (session && TIMED_LABELS[Number(session.state)] != null) sectorTracker.update(standings, (e) => grouper.key(e, standings), Date.now());
   if (rltMatcher) rltMatcher.prime(standings.map((e) => e.name));
   render();
 }
@@ -698,6 +928,7 @@ function connect() {
     } catch (_) {
       return;
     }
+    LLGFrameCap.handle(msg); // limite de FPS do painel
     if (msg.type === "standings") handleStandings(msg.data);
     else if (msg.type === "hello") checkBuildId(msg.buildId);
     else if (msg.type === "sessionLog") {
@@ -712,6 +943,10 @@ function connect() {
       logoLoader.setConfig(msg.data || {});
       document.querySelectorAll(".c-logo img").forEach((img) => delete img.dataset.key);
       render();
+    } else if (msg.type === "overlayCommand" && msg.name === "overlay.fullScroll") {
+      scrollManual(Number(msg.payload && msg.payload.dir) || 0);
+    } else if (msg.type === "overlayCommand" && msg.name === "overlay.setFullCenter") {
+      setCenterFocus(!!(msg.payload && msg.payload.value));
     } else if (msg.type === "overlayCommand" && msg.name === "overlay.resetRace") {
       gapTracker.reset();
       heldGaps.clear();
@@ -726,6 +961,17 @@ function connect() {
   });
   socket.addEventListener("close", () => setTimeout(connect, 500));
 }
+
+// roda do mouse (no navegador, ou no OBS com "Interagir"): rola a lista
+window.addEventListener(
+  "wheel",
+  (e) => {
+    if (!e.deltaY) return;
+    e.preventDefault();
+    scrollManual(e.deltaY > 0 ? 1 : -1);
+  },
+  { passive: false }
+);
 
 function fitToWindow() {
   document.documentElement.style.zoom = String(Math.max(0.3, window.innerWidth / BASE_WIDTH));

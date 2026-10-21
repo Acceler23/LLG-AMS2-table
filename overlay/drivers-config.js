@@ -262,10 +262,20 @@ const CLASS_COLORS = {
 
 const DEFAULT_COLOR = "rgb(0, 98, 255)";
 
+// Logo de cada carro (arquivo na pasta cars/ do repositorio de imagens).
+// A chave pode ser:
+//   - o nome inteiro do carro, como o jogo informa ("Copa Uno")
+//   - a primeira palavra do nome, a marca ("Porsche" vale para "Porsche 911 GT3 R")
+//   - um trecho com "*" na frente: vale para qualquer carro com aquele trecho no
+//     nome, sem diferenciar maiusculas ("*Corvette" pega "Chevrolet Corvette C8.R").
+//     Tem prioridade sobre a marca, para um modelo com logo proprio dentro de
+//     outra marca.
 const CAR_LOGOS = {
   // marcas do Le Mans Ultimate que faltavam (a chave e a primeira palavra do modelo)
   "Lexus": "lexus.png",
-  "Corvette": "chevrolet.png",
+  //Corvette: logo proprio, tambem nos carros com nome "Chevrolet Corvette ..."
+  "Corvette": "corvette.png",
+  "*Corvette": "corvette.png",
   "Genesis": "genesis.png",
   "Glickenhaus": "glickenhaus.png",
   "Vanwall": "vanwall.png",
@@ -411,6 +421,14 @@ const CAR_LOGOS = {
 const RLT_INGAME_MAP = {
 };
 
+// Logo de cada equipe (arquivo na pasta teams/ do repositorio de imagens).
+// Sem entrada aqui, o arquivo e o nome da equipe em minusculas com "_"
+// ("Hell Machine" -> hell_machine.png). A chave pode ser:
+//   - o nome exato da equipe ("Apex")
+//   - um trecho com "*" na frente: vale para qualquer equipe com aquele trecho
+//     no nome, sem diferenciar maiusculas. Serve para o nome que o jogo informa
+//     (LMU sem temporada do RLT), que costuma ter mais coisa:
+//       "*WRT": "wrt.png",      pega "BMW M Team WRT"
 const TEAM_LOGO_OVERRIDES = {
   "E.C.H.O": "echo.png",
   "Apex": "apex_racing.png",

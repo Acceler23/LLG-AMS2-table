@@ -305,7 +305,12 @@ function findStandingsRow(entry) {
   return null;
 }
 
+// redesenho com o limite de FPS do painel (shared/framecap.js)
 function render() {
+  return LLGFrameCap.run(renderNow, []);
+}
+
+function renderNow() {
   const card = document.getElementById("card");
   const entry = findPlayer(latestStandings);
   if (!entry) {
@@ -429,6 +434,7 @@ function connect() {
   socket.addEventListener("message", (ev) => {
     try {
       const msg = JSON.parse(ev.data);
+      LLGFrameCap.handle(msg); // limite de FPS do painel
       if (msg.type === "standings") {
         const payload = msg.data;
         const list = Array.isArray(payload) ? payload : payload && payload.standings;

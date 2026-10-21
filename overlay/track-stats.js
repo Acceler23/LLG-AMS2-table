@@ -28,7 +28,12 @@ function currentTrack() {
   return LLGDisplay.matchTrack(tracks, event ? names.concat([event.trackName, event.circuitOrigin]) : names, event && event.uniqueName);
 }
 
+// redesenho com o limite de FPS do painel (shared/framecap.js)
 function render() {
+  return LLGFrameCap.run(renderNow, []);
+}
+
+function renderNow() {
   const root = document.getElementById("track-stats");
   if (typeof HEADER_COLOR !== "undefined" && HEADER_COLOR) root.style.setProperty("--header-color", HEADER_COLOR);
   const track = stats ? currentTrack() : null;
@@ -96,6 +101,7 @@ function connect() {
     } catch (_) {
       return;
     }
+    LLGFrameCap.handle(msg); // limite de FPS do painel
     if (msg.type === "standings") handleStandings(msg.data);
     else if (msg.type === "hello") checkBuildId(msg.buildId);
     else if (msg.type === "trackStats") {

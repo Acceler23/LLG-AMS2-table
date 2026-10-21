@@ -24,6 +24,8 @@ const YELLOW_CONFIRM_MS = 1000; // bandeira que pisca por um instante nao entra 
 const YELLOW_REPEAT_MS = 30000; // o mesmo carro so entra de novo depois de 30 s
 const LOCAL_YELLOW_CLEAR_MS = 5000; // amarela local so conta como nova depois de 5 s sem nenhuma
 const LMU_SECTOR_YELLOW = 1; // valor de mSectorFlag com bandeira amarela
+const TIMED_STATES = new Set([1, 2, 3, 6]); // treino, teste, classificacao, time attack
+const RACE_QUIET_LAPS = 2; // corrida: sem aviso de melhor volta nas voltas 1 e 2
 
 function isDnf(e) {
   return e.raceState === 4 || e.raceState === 5 || e.raceState === 6;
@@ -64,6 +66,7 @@ function createSessionLog(opts) {
   const bests = new Map(); // nome -> melhor volta (ms) ja vista
   const pits = new Map(); // nome -> parada em andamento
   const penalties = new Map(); // nome -> punicoes pendentes
+  const penaltyKinds = new Map(); // nome -> tipo da punicao pendente (AMS2), ou null
   const disqualified = new Set();
   const seen = new Set(); // carros ja vistos nesta corrida
   const yellowSince = new Map(); // nome -> desde quando esta com bandeira amarela
@@ -72,6 +75,7 @@ function createSessionLog(opts) {
   let localYellow = { on: false, since: null, clearSince: null };
   let lastAt = null;
   let remainingSec = null; // da leitura atual
+  let isRaceSession = false;
 
   function reset() {
     startAt = null;
@@ -81,6 +85,7 @@ function createSessionLog(opts) {
     bests.clear();
     pits.clear();
     penalties.clear();
+    penaltyKinds.clear();
     disqualified.clear();
     seen.clear();
     yellowSince.clear();
@@ -97,8 +102,9 @@ function createSessionLog(opts) {
           id: nextId++,
           lap: e ? (e.currentLap != null ? e.currentLap : (e.lapsCompleted || 0) + 1) : null,
           sessionMs: startAt != null ? Math.max(0, t - startAt) : 0,
-          // tempo restante da corrida que o jogo informa (corrida por voltas: null)
+          // tempo restante da sessao que o jogo informa (corrida por voltas: null)
           remainingSec,
+          race: isRaceSession, // fora da corrida a overlay nao mostra posicoes ganhas/perdidas no box
         },
         data
       )
@@ -158,6 +164,9 @@ function createSessionLog(opts) {
       });
       const scope = ms < overall ? "overall" : ms < classBest ? "class" : "personal";
       if (!had && scope === "personal") return; // a primeira volta de cada um so entra se for a melhor da corrida ou da classe
+      // corrida: nas voltas 1 e 2 toda volta e "a melhor" de alguem; nao entra no log
+      // (a marca ja ficou guardada acima, entao a partir da 3a a comparacao vale)
+      if (isRaceSession && (e.lapsCompleted || 0) <= RACE_QUIET_LAPS) return;
       push(t, Object.assign({}, e, { currentLap: e.lapsCompleted || e.currentLap }), { type: "fastest", driver: e.name, lapMs: ms, scope, classKey: cls });
     });
   }
@@ -226,6 +235,14 @@ function createSessionLog(opts) {
         if (had != null && e.penalties > had) push(t, e, { type: "penalty", driver: e.name, pending: e.penalties });
         if (had != null && e.penalties < had) push(t, e, { type: "penaltyServed", driver: e.name, pending: e.penalties });
       }
+      // AMS2: tipo da punicao pendente de cada carro (drive-through, stop & go)
+      if ("penaltyType" in e) {
+        const kind = e.penaltyType || null;
+        const had = penaltyKinds.has(e.name) ? penaltyKinds.get(e.name) : undefined;
+        penaltyKinds.set(e.name, kind);
+        if (had !== undefined && kind && kind !== had) push(t, e, { type: "penalty", driver: e.name, kind });
+        if (had && !kind) push(t, e, { type: "penaltyServed", driver: e.name, kind: had });
+      }
       if (e.raceState === 4 && !disqualified.has(e.name)) {
         disqualified.add(e.name);
         push(t, e, { type: "disqualified", driver: e.name });
@@ -288,7 +305,9 @@ function createSessionLog(opts) {
       cleared = events.length > 0;
       reset();
     }
-    if (Number(session.state) !== 5) return cleared;
+    // corrida, e tambem treino, teste, classificacao e time attack
+    isRaceSession = Number(session.state) === 5;
+    if (!isRaceSession && !TIMED_STATES.has(Number(session.state))) return cleared;
     const list = ((payload && payload.standings) || []).filter((e) => e && e.name && e.position > 0);
     if (startAt == null) {
       if (!list.some((e) => typeof e.speedMs === "number" && e.speedMs > START_SPEED_MS)) return cleared;
@@ -299,7 +318,8 @@ function createSessionLog(opts) {
     const count = events.length;
     const firstId = nextId;
     const byName = new Map(list.map((e) => [e.name, e]));
-    overtakes(t, list, byName);
+    // ultrapassagem so em corrida: fora dela a posicao muda pelo tempo de volta
+    if (isRaceSession) overtakes(t, list, byName);
     fastestLaps(t, list);
     list.forEach((e) => seen.add(e.name));
     pitStops(t, list, dt);
